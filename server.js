@@ -19,6 +19,40 @@ if (!process.env.ZOHO_ORGANIZATION_ID) {
   console.warn('Warning: ZOHO_ORGANIZATION_ID not found in environment variables. Using hardcoded value.');
 }
 
+// Initialize Firebase Admin SDK if not already initialized
+if (!admin.apps.length) {
+  try {
+    // Check if we have environment variables for Firebase credentials
+    if (process.env.FIREBASE_PROJECT_ID && 
+        process.env.FIREBASE_PRIVATE_KEY && 
+        process.env.FIREBASE_CLIENT_EMAIL) {
+      
+      admin.initializeApp({
+        credential: admin.credential.cert({
+          projectId: process.env.FIREBASE_PROJECT_ID,
+          privateKey: process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, '\n'),
+          clientEmail: process.env.FIREBASE_CLIENT_EMAIL
+        })
+      });
+      console.log('Firebase Admin initialized using environment variables');
+    } else {
+      // Fall back to service account file
+      const serviceAccountPath = path.join(__dirname, 'serviceAccountKey.json');
+      if (fs.existsSync(serviceAccountPath)) {
+        const serviceAccount = require(serviceAccountPath);
+        admin.initializeApp({
+          credential: admin.credential.cert(serviceAccount)
+        });
+        console.log('Firebase Admin initialized using service account file');
+      } else {
+        throw new Error('Firebase credentials not found');
+      }
+    }
+  } catch (error) {
+    console.error('Error initializing Firebase Admin:', error);
+  }
+}
+
 const app = express();
 const PORT = process.env.PORT || 3000;
 const ZOHO_ORGANIZATION_ID = process.env.ZOHO_ORGANIZATION_ID;
@@ -39,25 +73,39 @@ const loadTokens = async () => {
   try {
     // For production (like Vercel), use Firestore
     if (process.env.NODE_ENV === 'production') {
-      const tokenDoc = await db.collection('system').doc('zoho_tokens').get();
-      
-      if (tokenDoc.exists) {
-        tokens = tokenDoc.data();
-        console.log('Loaded tokens from Firestore');
-      } else {
-        // If no tokens in Firestore yet, try to initialize from local file if available
-        if (fs.existsSync(tokenFilePath)) {
-          try {
-            const fileTokens = JSON.parse(fs.readFileSync(tokenFilePath, 'utf8'));
-            // Save to Firestore for future use
-            await db.collection('system').doc('zoho_tokens').set(fileTokens);
-            tokens = fileTokens;
-            console.log('Initialized Firestore tokens from file');
-          } catch (error) {
-            console.error('Error reading tokens file:', error);
-          }
+      try {
+        const tokenDoc = await db.collection('system').doc('zoho_tokens').get();
+        
+        if (tokenDoc.exists) {
+          tokens = tokenDoc.data();
+          console.log('Loaded tokens from Firestore');
         } else {
-          console.warn('No tokens found in Firestore or file');
+          // If no tokens in Firestore yet, try to initialize from environment variables
+          if (process.env.ZOHO_ACCESS_TOKEN && process.env.ZOHO_REFRESH_TOKEN && process.env.ZOHO_TOKEN_EXPIRES_AT) {
+            tokens = {
+              access_token: process.env.ZOHO_ACCESS_TOKEN,
+              refresh_token: process.env.ZOHO_REFRESH_TOKEN,
+              expires_at: parseInt(process.env.ZOHO_TOKEN_EXPIRES_AT)
+            };
+            
+            // Save to Firestore
+            await db.collection('system').doc('zoho_tokens').set(tokens);
+            console.log('Initialized Firestore tokens from environment variables');
+          } else {
+            console.warn('No tokens found in Firestore or environment variables');
+          }
+        }
+      } catch (firestoreError) {
+        console.error('Firestore error, falling back to environment variables:', firestoreError);
+        
+        // Fall back to environment variables if Firestore fails
+        if (process.env.ZOHO_ACCESS_TOKEN && process.env.ZOHO_REFRESH_TOKEN && process.env.ZOHO_TOKEN_EXPIRES_AT) {
+          tokens = {
+            access_token: process.env.ZOHO_ACCESS_TOKEN,
+            refresh_token: process.env.ZOHO_REFRESH_TOKEN,
+            expires_at: parseInt(process.env.ZOHO_TOKEN_EXPIRES_AT)
+          };
+          console.log('Loaded tokens from environment variables');
         }
       }
     } 
@@ -84,8 +132,17 @@ const saveTokens = async () => {
   try {
     // For production (like Vercel), use Firestore
     if (process.env.NODE_ENV === 'production') {
-      await db.collection('system').doc('zoho_tokens').set(tokens);
-      console.log('Tokens saved to Firestore');
+      try {
+        await db.collection('system').doc('zoho_tokens').set(tokens);
+        console.log('Tokens saved to Firestore');
+      } catch (firestoreError) {
+        console.error('Error saving to Firestore, tokens will be lost on restart:', firestoreError);
+        
+        // Set environment variables for the current session (won't persist across restarts)
+        process.env.ZOHO_ACCESS_TOKEN = tokens.access_token;
+        process.env.ZOHO_REFRESH_TOKEN = tokens.refresh_token;
+        process.env.ZOHO_TOKEN_EXPIRES_AT = tokens.expires_at.toString();
+      }
     } 
     // For development, use file storage
     else {
