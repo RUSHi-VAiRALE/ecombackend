@@ -28,25 +28,79 @@ app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Token storage - in production, use a database
+// Token storage - environment-specific implementation
 const tokenFilePath = path.join(__dirname, 'tokens.json');
 
 // Initialize tokens
 let tokens = { access_token: '', refresh_token: '', expires_at: 0 };
 
-// Load tokens if they exist
-if (fs.existsSync(tokenFilePath)) {
+// Load tokens based on environment
+const loadTokens = async () => {
   try {
-    tokens = JSON.parse(fs.readFileSync(tokenFilePath, 'utf8'));
+    // For production (like Vercel), use Firestore
+    if (process.env.NODE_ENV === 'production') {
+      const tokenDoc = await db.collection('system').doc('zoho_tokens').get();
+      
+      if (tokenDoc.exists) {
+        tokens = tokenDoc.data();
+        console.log('Loaded tokens from Firestore');
+      } else {
+        // If no tokens in Firestore yet, try to initialize from local file if available
+        if (fs.existsSync(tokenFilePath)) {
+          try {
+            const fileTokens = JSON.parse(fs.readFileSync(tokenFilePath, 'utf8'));
+            // Save to Firestore for future use
+            await db.collection('system').doc('zoho_tokens').set(fileTokens);
+            tokens = fileTokens;
+            console.log('Initialized Firestore tokens from file');
+          } catch (error) {
+            console.error('Error reading tokens file:', error);
+          }
+        } else {
+          console.warn('No tokens found in Firestore or file');
+        }
+      }
+    } 
+    // For development, use file storage
+    else {
+      if (fs.existsSync(tokenFilePath)) {
+        try {
+          tokens = JSON.parse(fs.readFileSync(tokenFilePath, 'utf8'));
+          console.log('Loaded tokens from file');
+        } catch (error) {
+          console.error('Error reading tokens file:', error);
+        }
+      } else {
+        console.warn('Tokens file not found');
+      }
+    }
   } catch (error) {
-    console.error('Error reading tokens file:', error);
+    console.error('Error loading tokens:', error);
   }
-}
-
-// Save tokens to file
-const saveTokens = () => {
-  fs.writeFileSync(tokenFilePath, JSON.stringify(tokens, null, 2));
 };
+
+// Save tokens - environment-specific implementation
+const saveTokens = async () => {
+  try {
+    // For production (like Vercel), use Firestore
+    if (process.env.NODE_ENV === 'production') {
+      await db.collection('system').doc('zoho_tokens').set(tokens);
+      console.log('Tokens saved to Firestore');
+    } 
+    // For development, use file storage
+    else {
+      fs.writeFileSync(tokenFilePath, JSON.stringify(tokens, null, 2));
+      console.log('Tokens saved to file');
+    }
+  } catch (error) {
+    console.error('Error saving tokens:', error);
+  }
+};
+
+// Load tokens on startup - make this async
+(async () => {
+  await loadTokens();
+})();
 
 // OAuth routes
 app.get('/auth/zoho', (req, res) => {
@@ -54,6 +108,7 @@ app.get('/auth/zoho', (req, res) => {
   res.redirect(authUrl);
 });
 
+// Update the callback route to use async saveTokens
 app.get('/auth/callback', async (req, res) => {
   const { code } = req.query;
   console.log(code)
@@ -78,7 +133,7 @@ app.get('/auth/callback', async (req, res) => {
       expires_at: Date.now() + (await response.data.expires_in * 1000)
     };
     console.log(tokens)
-    saveTokens();
+    await saveTokens(); // Make this await
     res.send('Authentication successful! You can now use the Zoho Inventory API.');
   } catch (error) {
     console.error('Error getting tokens:', error.response?.data || error.message);
@@ -86,7 +141,7 @@ app.get('/auth/callback', async (req, res) => {
   }
 });
 
-// Refresh token function
+// Update refreshAccessToken to use async saveTokens
 const refreshAccessToken = async () => {
   try {
     const params = new URLSearchParams();
@@ -107,7 +162,7 @@ const refreshAccessToken = async () => {
       expires_at: Date.now() + (response.data.expires_in * 1000)
     };
 
-    saveTokens();
+    await saveTokens(); // Make this await
     return tokens.access_token;
   } catch (error) {
     console.error('Error refreshing token:', error.response?.data || error.message);
