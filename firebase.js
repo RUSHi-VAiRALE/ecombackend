@@ -46,10 +46,9 @@ try {
   // Initialize Firestore
   const db = getFirestore(firebaseApp);
   
-  
+  module.exports = { db };
 } catch (error) {
   console.error('Error initializing Firebase:', error);
   process.exit(1);
 }
 
-module.exports = { db };
