@@ -144,7 +144,7 @@ const saveTokens = async () => {
         };
         
         // Check if any required field is missing
-        if (!tokenData.access_token || !tokenData.refresh_token) {
+        if (!tokenData.access_token) {
           console.error('Cannot save tokens: Missing required token fields');
           return;
         }
