@@ -92,6 +92,7 @@ const loadTokens = async () => {
             };
             
             // Save to Firestore
+            console.log(db)
             await db.collection('system').doc('zoho_tokens').set(tokens);
             console.log('Initialized Firestore tokens from environment variables');
           } else {
@@ -142,7 +143,7 @@ const saveTokens = async () => {
           refresh_token: tokens.refresh_token || '',
           expires_at: tokens.expires_at || 0
         };
-        
+        console.log(tokenData)
         // Check if any required field is missing
         if (!tokenData.access_token) {
           console.error('Cannot save tokens: Missing required token fields');
