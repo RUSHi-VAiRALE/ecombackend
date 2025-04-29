@@ -80,6 +80,7 @@ const tokenFilePath = path.join(__dirname, 'tokens.json');
 let tokens = { access_token: '', refresh_token: '', expires_at: 0 };
 
 // Load tokens based on environment
+// Modify the loadTokens function to use a more reliable approach
 const loadTokens = async () => {
   try {
     // For production (like Vercel), try multiple approaches
