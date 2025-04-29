@@ -27,10 +27,13 @@ if (!admin.apps.length) {
         process.env.FIREBASE_PRIVATE_KEY && 
         process.env.FIREBASE_CLIENT_EMAIL) {
       
+      // Make sure to properly format the private key
+      const privateKey = process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, '\n');
+      
       admin.initializeApp({
         credential: admin.credential.cert({
           projectId: process.env.FIREBASE_PROJECT_ID,
-          privateKey: process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, '\n'),
+          privateKey: privateKey,
           clientEmail: process.env.FIREBASE_CLIENT_EMAIL
         })
       });
@@ -127,21 +130,47 @@ const loadTokens = async () => {
   }
 };
 
-// Save tokens - environment-specific implementation
+// Save tokens - environment-specific implementation with better error handling
 const saveTokens = async () => {
   try {
     // For production (like Vercel), use Firestore
     if (process.env.NODE_ENV === 'production') {
       try {
-        await db.collection('system').doc('zoho_tokens').set(tokens);
+        // Validate tokens before saving to Firestore
+        const tokenData = {
+          access_token: tokens.access_token || '',
+          refresh_token: tokens.refresh_token || '',
+          expires_at: tokens.expires_at || 0
+        };
+        
+        // Check if any required field is missing
+        if (!tokenData.access_token || !tokenData.refresh_token) {
+          console.error('Cannot save tokens: Missing required token fields');
+          return;
+        }
+        
+        // Save to Firestore
+        await db.collection('system').doc('zoho_tokens').set(tokenData);
         console.log('Tokens saved to Firestore');
       } catch (firestoreError) {
         console.error('Error saving to Firestore, tokens will be lost on restart:', firestoreError);
         
-        // Set environment variables for the current session (won't persist across restarts)
-        process.env.ZOHO_ACCESS_TOKEN = tokens.access_token;
-        process.env.ZOHO_REFRESH_TOKEN = tokens.refresh_token;
-        process.env.ZOHO_TOKEN_EXPIRES_AT = tokens.expires_at.toString();
+        // Save tokens to environment variables as fallback
+        process.env.ZOHO_ACCESS_TOKEN = tokens.access_token || '';
+        process.env.ZOHO_REFRESH_TOKEN = tokens.refresh_token || '';
+        process.env.ZOHO_TOKEN_EXPIRES_AT = (tokens.expires_at || 0).toString();
+        
+        // Try to save to a temporary file as a last resort
+        try {
+          const tmpDir = '/tmp'; // Use /tmp directory in serverless environments
+          if (fs.existsSync(tmpDir)) {
+            const tmpTokenPath = path.join(tmpDir, 'zoho_tokens.json');
+            fs.writeFileSync(tmpTokenPath, JSON.stringify(tokens, null, 2));
+            console.log('Tokens saved to temporary file as fallback');
+          }
+        } catch (tmpError) {
+          console.error('Failed to save tokens to temporary file:', tmpError);
+        }
       }
     } 
     // For development, use file storage
@@ -150,7 +179,7 @@ const saveTokens = async () => {
       console.log('Tokens saved to file');
     }
   } catch (error) {
-    console.error('Error saving tokens:', error);
+    console.error('Error in saveTokens function:', error);
   }
 };
 
@@ -165,7 +194,7 @@ app.get('/auth/zoho', (req, res) => {
   res.redirect(authUrl);
 });
 
-// Update the callback route to use async saveTokens
+// Update the callback route to ensure tokens are properly set
 app.get('/auth/callback', async (req, res) => {
   const { code } = req.query;
   console.log(code)
@@ -183,14 +212,34 @@ app.get('/auth/callback', async (req, res) => {
         code : code
       }
     });
-    console.log(response.data)
+    
+    console.log(response.data);
+    
+    // Validate response data
+    if (!response.data || !response.data.access_token) {
+      return res.status(500).send('Invalid response from Zoho authentication server');
+    }
+    
+    // Set tokens with proper validation
     tokens = {
-      access_token: await response.data.access_token,
-      refresh_token: await response.data.refresh_token || '',
-      expires_at: Date.now() + (await response.data.expires_in * 1000)
+      access_token: response.data.access_token || '',
+      refresh_token: response.data.refresh_token || '',
+      expires_at: Date.now() + ((response.data.expires_in || 3600) * 1000)
     };
-    console.log(tokens)
-    await saveTokens(); // Make this await
+    
+    console.log('Tokens received:', {
+      access_token: tokens.access_token ? 'present' : 'missing',
+      refresh_token: tokens.refresh_token ? 'present' : 'missing',
+      expires_at: tokens.expires_at
+    });
+    
+    // Save tokens and handle any errors
+    try {
+      await saveTokens();
+    } catch (saveError) {
+      console.error('Error saving tokens, but continuing:', saveError);
+    }
+    
     res.send('Authentication successful! You can now use the Zoho Inventory API.');
   } catch (error) {
     console.error('Error getting tokens:', error.response?.data || error.message);
