@@ -50,7 +50,7 @@ const saveTokens = () => {
 
 // OAuth routes
 app.get('/auth/zoho', (req, res) => {
-  const authUrl = `https://accounts.zoho.com/oauth/v2/auth?scope=ZohoInventory.fullaccess.all&client_id=1000.E1FI8PQLI73ROCUKFFAPJO9O3ZPWNW&response_type=code&access_type=offline&redirect_uri=http://localhost:3000/auth/callback`;
+  const authUrl = `https://accounts.zoho.com/oauth/v2/auth?scope=ZohoInventory.fullaccess.all&client_id=1000.E1FI8PQLI73ROCUKFFAPJO9O3ZPWNW&response_type=code&access_type=offline&redirect_uri=https://ecombackend-7z9j.vercel.app/auth/callback`;
   res.redirect(authUrl);
 });
 
@@ -67,7 +67,7 @@ app.get('/auth/callback', async (req, res) => {
         grant_type: 'authorization_code',
         client_id: process.env.ZOHO_CLIENT_ID,
         client_secret: process.env.ZOHO_CLIENT_SECRET,
-        redirect_uri: 'http://localhost:3000/auth/callback',
+        redirect_uri: 'https://ecombackend-7z9j.vercel.app/auth/callback',
         code : code
       }
     });
