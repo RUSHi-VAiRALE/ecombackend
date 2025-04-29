@@ -30,13 +30,18 @@ if (!admin.apps.length) {
       // Make sure to properly format the private key
       const privateKey = process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, '\n');
       
-      admin.initializeApp({
+      const firebaseConfig = {
         credential: admin.credential.cert({
           projectId: process.env.FIREBASE_PROJECT_ID,
           privateKey: privateKey,
           clientEmail: process.env.FIREBASE_CLIENT_EMAIL
-        })
-      });
+        }),
+        // Add these options for better performance in serverless environments
+        ignoreUndefinedProperties: true,
+        timestampsInSnapshots: true
+      };
+      
+      admin.initializeApp(firebaseConfig);
       console.log('Firebase Admin initialized using environment variables');
     } else {
       // Fall back to service account file
@@ -44,7 +49,10 @@ if (!admin.apps.length) {
       if (fs.existsSync(serviceAccountPath)) {
         const serviceAccount = require(serviceAccountPath);
         admin.initializeApp({
-          credential: admin.credential.cert(serviceAccount)
+          credential: admin.credential.cert(serviceAccount),
+          // Add these options for better performance in serverless environments
+          ignoreUndefinedProperties: true,
+          timestampsInSnapshots: true
         });
         console.log('Firebase Admin initialized using service account file');
       } else {
@@ -74,43 +82,45 @@ let tokens = { access_token: '', refresh_token: '', expires_at: 0 };
 // Load tokens based on environment
 const loadTokens = async () => {
   try {
-    // For production (like Vercel), use Firestore
+    // For production (like Vercel), try multiple approaches
     if (process.env.NODE_ENV === 'production') {
+      // First, try to load from environment variables directly
+      if (process.env.ZOHO_ACCESS_TOKEN && process.env.ZOHO_REFRESH_TOKEN && process.env.ZOHO_TOKEN_EXPIRES_AT) {
+        tokens = {
+          access_token: process.env.ZOHO_ACCESS_TOKEN,
+          refresh_token: process.env.ZOHO_REFRESH_TOKEN,
+          expires_at: parseInt(process.env.ZOHO_TOKEN_EXPIRES_AT)
+        };
+        console.log('Loaded tokens from environment variables');
+        return;
+      }
+      
+      // Then try Firestore
       try {
-        const tokenDoc = await db.collection('system').doc('zoho_tokens').get();
+        // Use a more direct approach to Firestore
+        const firestore = admin.firestore();
+        const tokenDoc = await firestore.collection('system').doc('zoho_tokens').get();
         
         if (tokenDoc.exists) {
           tokens = tokenDoc.data();
           console.log('Loaded tokens from Firestore');
         } else {
-          // If no tokens in Firestore yet, try to initialize from environment variables
-          if (process.env.ZOHO_ACCESS_TOKEN && process.env.ZOHO_REFRESH_TOKEN && process.env.ZOHO_TOKEN_EXPIRES_AT) {
-            tokens = {
-              access_token: process.env.ZOHO_ACCESS_TOKEN,
-              refresh_token: process.env.ZOHO_REFRESH_TOKEN,
-              expires_at: parseInt(process.env.ZOHO_TOKEN_EXPIRES_AT)
-            };
-            
-            // Save to Firestore
-            console.log(db)
-            await db.collection('system').doc('zoho_tokens').set(tokens);
-            console.log('Initialized Firestore tokens from environment variables');
-          } else {
-            console.warn('No tokens found in Firestore or environment variables');
-          }
+          console.warn('No tokens found in Firestore');
         }
       } catch (firestoreError) {
-        console.error('Firestore error, falling back to environment variables:', firestoreError);
-        
-        // Fall back to environment variables if Firestore fails
-        if (process.env.ZOHO_ACCESS_TOKEN && process.env.ZOHO_REFRESH_TOKEN && process.env.ZOHO_TOKEN_EXPIRES_AT) {
-          tokens = {
-            access_token: process.env.ZOHO_ACCESS_TOKEN,
-            refresh_token: process.env.ZOHO_REFRESH_TOKEN,
-            expires_at: parseInt(process.env.ZOHO_TOKEN_EXPIRES_AT)
-          };
-          console.log('Loaded tokens from environment variables');
+        console.error('Firestore error, tokens may not be available:', firestoreError);
+      }
+      
+      // Finally, try the temporary file in /tmp
+      try {
+        const tmpDir = '/tmp';
+        const tmpTokenPath = path.join(tmpDir, 'zoho_tokens.json');
+        if (fs.existsSync(tmpTokenPath)) {
+          tokens = JSON.parse(fs.readFileSync(tmpTokenPath, 'utf8'));
+          console.log('Loaded tokens from temporary file');
         }
+      } catch (tmpError) {
+        console.error('Error reading from temporary file:', tmpError);
       }
     } 
     // For development, use file storage
@@ -131,47 +141,48 @@ const loadTokens = async () => {
   }
 };
 
-// Save tokens - environment-specific implementation with better error handling
+// Modify the saveTokens function to use a more reliable approach
 const saveTokens = async () => {
   try {
-    // For production (like Vercel), use Firestore
+    // For production (like Vercel), try multiple approaches
     if (process.env.NODE_ENV === 'production') {
+      // Validate tokens before saving
+      const tokenData = {
+        access_token: tokens.access_token || '',
+        refresh_token: tokens.refresh_token || '',
+        expires_at: tokens.expires_at || 0
+      };
+      
+      // Check if any required field is missing
+      if (!tokenData.access_token) {
+        console.error('Cannot save tokens: Missing required token fields');
+        return;
+      }
+      
+      // Save to environment variables for the current session
+      process.env.ZOHO_ACCESS_TOKEN = tokenData.access_token;
+      process.env.ZOHO_REFRESH_TOKEN = tokenData.refresh_token;
+      process.env.ZOHO_TOKEN_EXPIRES_AT = tokenData.expires_at.toString();
+      
+      // Try to save to Firestore
       try {
-        // Validate tokens before saving to Firestore
-        const tokenData = {
-          access_token: tokens.access_token || '',
-          refresh_token: tokens.refresh_token || '',
-          expires_at: tokens.expires_at || 0
-        };
-        console.log(tokenData)
-        // Check if any required field is missing
-        if (!tokenData.access_token) {
-          console.error('Cannot save tokens: Missing required token fields');
-          return;
-        }
-        
-        // Save to Firestore
-        await db.collection('system').doc('zoho_tokens').set(tokenData);
+        const firestore = admin.firestore();
+        await firestore.collection('system').doc('zoho_tokens').set(tokenData);
         console.log('Tokens saved to Firestore');
       } catch (firestoreError) {
-        console.error('Error saving to Firestore, tokens will be lost on restart:', firestoreError);
-        
-        // Save tokens to environment variables as fallback
-        process.env.ZOHO_ACCESS_TOKEN = tokens.access_token || '';
-        process.env.ZOHO_REFRESH_TOKEN = tokens.refresh_token || '';
-        process.env.ZOHO_TOKEN_EXPIRES_AT = (tokens.expires_at || 0).toString();
-        
-        // Try to save to a temporary file as a last resort
-        try {
-          const tmpDir = '/tmp'; // Use /tmp directory in serverless environments
-          if (fs.existsSync(tmpDir)) {
-            const tmpTokenPath = path.join(tmpDir, 'zoho_tokens.json');
-            fs.writeFileSync(tmpTokenPath, JSON.stringify(tokens, null, 2));
-            console.log('Tokens saved to temporary file as fallback');
-          }
-        } catch (tmpError) {
-          console.error('Failed to save tokens to temporary file:', tmpError);
+        console.error('Error saving to Firestore:', firestoreError);
+      }
+      
+      // Try to save to a temporary file as a fallback
+      try {
+        const tmpDir = '/tmp'; // Use /tmp directory in serverless environments
+        if (fs.existsSync(tmpDir)) {
+          const tmpTokenPath = path.join(tmpDir, 'zoho_tokens.json');
+          fs.writeFileSync(tmpTokenPath, JSON.stringify(tokenData, null, 2));
+          console.log('Tokens saved to temporary file as fallback');
         }
+      } catch (tmpError) {
+        console.error('Failed to save tokens to temporary file:', tmpError);
       }
     } 
     // For development, use file storage
