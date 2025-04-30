@@ -27,7 +27,9 @@ const ZOHO_ORGANIZATION_ID = process.env.ZOHO_ORGANIZATION_ID;
 app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
-
+app.use('/api', profileRoutes);
+app.use('/api', paymentRoutes);
+// Home route
 // Token storage - in production, use a database
 const tokenFilePath = path.join(__dirname, 'tokens.json');
 
@@ -161,7 +163,6 @@ app.post('/api/customers', ensureValidToken, async (req, res) => {
       "email": req.body.email,
       "phone": req.body.mobile
     }
-    console.log(customerData)
     //Make request to Zoho Inventory API to create a contact (customer)
     const response = await axios.post(
       'https://www.zohoapis.in/inventory/v1/contacts', 

@@ -21,10 +21,18 @@ try {
 
 // Initialize Firebase
 const firebaseApp = initializeApp({
-  credential: cert(serviceAccount)
+  credential: cert(serviceAccount),
+  databaseURL:"https://lookspure-backend.firebaseio.com",
+  projectId : "lookspure-backend"
 });
 
 // Initialize Firestore
 const db = getFirestore(firebaseApp);
-
+db.collection('customers').get()
+  .then(snapshot => {
+    console.log('Connection successful!');
+  })
+  .catch(error => {
+    console.error('Error details:', error);
+  });
 module.exports = { db };

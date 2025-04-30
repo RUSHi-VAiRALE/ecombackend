@@ -16,6 +16,7 @@ const verifyFirebaseToken = async (req, res, next) => {
   try {
     const decodedToken = await admin.auth().verifyIdToken(token);
     req.user = decodedToken;
+    console.log("profile",req.user)
     next();
   } catch (error) {
     console.error('Error verifying Firebase token:', error);
@@ -202,9 +203,10 @@ router.post('/users/:userId/addresses/shipping', verifyFirebaseToken, async (req
 });
 
 router.get('/customers/profile', verifyFirebaseToken, async (req, res) => {
+  
     try {
       const { email } = req.query;
-      
+      console.log(req.query)
       if (!email) {
         return res.status(400).json({ error: 'Email parameter is required' });
       }
@@ -215,7 +217,7 @@ router.get('/customers/profile', verifyFirebaseToken, async (req, res) => {
       }
       
       // Query Firestore for customer with matching email
-      const customersRef = db.collection('customers');
+      const customersRef = admin.firestore().collection('customers')
       const snapshot = await customersRef.where('email', '==', email).limit(1).get();
       
       if (snapshot.empty) {
