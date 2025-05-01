@@ -16,7 +16,6 @@ const verifyFirebaseToken = async (req, res, next) => {
   try {
     const decodedToken = await admin.auth().verifyIdToken(token);
     req.user = decodedToken;
-    console.log("profile",req.user)
     next();
   } catch (error) {
     console.error('Error verifying Firebase token:', error);

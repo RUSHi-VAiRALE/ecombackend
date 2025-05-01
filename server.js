@@ -22,7 +22,7 @@ if (!process.env.ZOHO_ORGANIZATION_ID) {
 const app = express();
 const PORT = process.env.PORT || 3000;
 const ZOHO_ORGANIZATION_ID = process.env.ZOHO_ORGANIZATION_ID;
-
+const API_URL = process.env.API_URL
 // Middleware
 app.use(cors());
 app.use(express.json());
@@ -36,23 +36,67 @@ const tokenFilePath = path.join(__dirname, 'tokens.json');
 // Initialize tokens
 let tokens = { access_token: '', refresh_token: '', expires_at: 0 };
 
-// Load tokens if they exist
-if (fs.existsSync(tokenFilePath)) {
+// Load tokens from Firestore or file
+const loadTokens = async () => {
   try {
-    tokens = JSON.parse(fs.readFileSync(tokenFilePath, 'utf8'));
+    // First try to load from Firestore
+    const tokenDoc = await db.collection('system').doc('zoho_tokens').get();
+    
+    if (tokenDoc.exists) {
+      tokens = tokenDoc.data();
+      console.log('Loaded tokens from Firestore');
+    } else {
+      console.warn('Warning: No tokens found in Firestore. Using hardcoded values.');
+    }
   } catch (error) {
-    console.error('Error reading tokens file:', error);
+    console.error('Error loading tokens from Firestore:', error);
+    
+    // Fall back to file if Firestore fails
+    // if (fs.existsSync(tokenFilePath)) {
+    //   try {
+    //     tokens = JSON.parse(fs.readFileSync(tokenFilePath, 'utf8'));
+    //     console.log('Loaded tokens from file (Firestore fallback)');
+    //   } catch (error) {
+    //     console.error('Error reading tokens file:', error);
+    //   }
+    // }
   }
-}
-
-// Save tokens to file
-const saveTokens = () => {
-  fs.writeFileSync(tokenFilePath, JSON.stringify(tokens, null, 2));
 };
+
+// Save tokens to Firestore and file as backup
+const saveTokens = async () => {
+  try {
+    // Save to Firestore
+    await db.collection('system').doc('zoho_tokens').set({
+      ...tokens,
+      createdAt:new Date()
+    });
+    console.log('Saved tokens to Firestore');
+    
+    // Also save to file as backup
+    //fs.writeFileSync(tokenFilePath, JSON.stringify(tokens, null, 2));
+    console.log('Saved tokens to file (backup)');
+  } catch (error) {
+    console.error('Error saving tokens to Firestore:', error);
+    
+    // Fall back to file if Firestore fails
+    // try {
+    //   fs.writeFileSync(tokenFilePath, JSON.stringify(tokens, null, 2));
+    //   console.log('Saved tokens to file only (Firestore failed)');
+    // } catch (fileError) {
+    //   console.error('Error saving tokens to file:', fileError);
+    // }
+  }
+};
+
+// Load tokens on startup
+loadTokens().catch(error => {
+  console.error('Failed to load tokens on startup:', error);
+});
 
 // OAuth routes
 app.get('/auth/zoho', (req, res) => {
-  const authUrl = `https://accounts.zoho.com/oauth/v2/auth?scope=ZohoInventory.fullaccess.all&client_id=1000.E1FI8PQLI73ROCUKFFAPJO9O3ZPWNW&response_type=code&access_type=offline&redirect_uri=http://localhost:3000/auth/callback`;
+  const authUrl = `https://accounts.zoho.com/oauth/v2/auth?scope=ZohoInventory.fullaccess.all&client_id=1000.E1FI8PQLI73ROCUKFFAPJO9O3ZPWNW&response_type=code&access_type=offline&redirect_uri=${API_URL}/auth/callback`;
   res.redirect(authUrl);
 });
 
@@ -69,7 +113,7 @@ app.get('/auth/callback', async (req, res) => {
         grant_type: 'authorization_code',
         client_id: process.env.ZOHO_CLIENT_ID,
         client_secret: process.env.ZOHO_CLIENT_SECRET,
-        redirect_uri: 'http://localhost:3000/auth/callback',
+        redirect_uri: `${API_URL}/auth/callback`,
         code : code
       }
     });
@@ -80,7 +124,7 @@ app.get('/auth/callback', async (req, res) => {
       expires_at: Date.now() + (await response.data.expires_in * 1000)
     };
     console.log(tokens)
-    saveTokens();
+    await saveTokens();
     res.send('Authentication successful! You can now use the Zoho Inventory API.');
   } catch (error) {
     console.error('Error getting tokens:', error.response?.data || error.message);
@@ -109,7 +153,7 @@ const refreshAccessToken = async () => {
       expires_at: Date.now() + (response.data.expires_in * 1000)
     };
 
-    saveTokens();
+    await saveTokens();
     return tokens.access_token;
   } catch (error) {
     console.error('Error refreshing token:', error.response?.data || error.message);
@@ -119,7 +163,7 @@ const refreshAccessToken = async () => {
 
 // Middleware to ensure valid token
 const ensureValidToken = async (req, res, next) => {
-  if (!tokens.access_token || !tokens.refresh_token) {
+  if (!tokens.access_token) {
     return res.status(401).send('Not authenticated with Zoho. Please visit /auth/zoho to authenticate.');
   }
 
