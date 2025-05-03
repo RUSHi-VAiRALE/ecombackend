@@ -10,6 +10,7 @@ const admin = require('firebase-admin');
 // Import routes
 const profileRoutes = require('./routes/profile');
 const paymentRoutes = require('./routes/payment');
+const productRoutes = require('./routes/products');
 
 // Load environment variables - make sure this is at the top
 dotenv.config({ path: path.join(__dirname, '.env') });
@@ -29,6 +30,7 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use('/api', profileRoutes);
 app.use('/api', paymentRoutes);
+app.use('/api', productRoutes);
 // Home route
 // Token storage - in production, use a database
 const tokenFilePath = path.join(__dirname, 'tokens.json');

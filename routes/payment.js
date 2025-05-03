@@ -81,9 +81,9 @@ router.post('/orders/create', verifyFirebaseToken, async (req, res) => {
       shippingAddress, 
       billingAddress 
     } = req.body;
-    
+    console.log(req.body)
     // Verify payment signature
-    const generated_signature = crypto.createHmac('sha256', process.env.RAZORPAY_KEY_SECRET || 'your_razorpay_secret')
+    const generated_signature = crypto.createHmac('sha256', "En7j4s7kTCKeIk6Go25vvwuX")
       .update(paymentResponse.razorpay_order_id + '|' + paymentResponse.razorpay_payment_id)
       .digest('hex');
     
