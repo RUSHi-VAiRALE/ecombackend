@@ -12,6 +12,7 @@ const profileRoutes = require('./routes/profile');
 const paymentRoutes = require('./routes/payment');
 const productRoutes = require('./routes/products');
 const customerRoutes = require('./routes/zoho')
+const adminRoutes = require('./routes/admin');
 // Load environment variables - make sure this is at the top
 dotenv.config({ path: path.join(__dirname, '.env') });
 
@@ -32,6 +33,7 @@ app.use('/api', profileRoutes);
 app.use('/api', paymentRoutes);
 app.use('/api', productRoutes);
 app.use('/api', customerRoutes)
+app.use('/api/admin', adminRoutes);
 // Home route
 // Token storage - in production, use a database
 const tokenFilePath = path.join(__dirname, 'tokens.json');
