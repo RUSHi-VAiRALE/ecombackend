@@ -72,18 +72,7 @@ router.post('/products', verifyFirebaseToken, async (req, res) => {
           purchase_rate: productData.originalPrice || productData.price,
           item_type: "inventory",
           product_type: "goods",
-          is_taxable: true,
           unit: "qty",
-          custom_fields: [
-            {
-              label: "Subtitle",
-              value: productData.subtitle || ''
-            },
-            {
-              label: "Tagline",
-              value: productData.tagline || ''
-            }
-          ]
         };
         
         const zohoResponse = await axios({
@@ -110,6 +99,7 @@ router.post('/products', verifyFirebaseToken, async (req, res) => {
           subtitle: productData.subtitle || '',
           tagline: productData.tagline || '',
           price: productData.price,
+          category : productData.category || '',
           originalPrice: productData.originalPrice || productData.price,
           discount: productData.discount || '',
           rating: productData.rating || 0,
@@ -127,7 +117,7 @@ router.post('/products', verifyFirebaseToken, async (req, res) => {
           updatedAt: admin.firestore.FieldValue.serverTimestamp()
         };
         
-        const productRef = db.collection('products').doc();
+        const productRef = db.collection('products').doc(firebaseProductData.id);
         transaction.set(productRef, firebaseProductData);
         
         return {
