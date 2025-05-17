@@ -435,4 +435,178 @@ router.get('/customers/profile', verifyFirebaseToken, async (req, res) => {
     }
   });
 
+// Get user orders with pagination
+router.get('/users/:userId/orders', verifyFirebaseToken, async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const { page = 1, limit = 10, status } = req.query;
+    
+    // Convert page and limit to numbers
+    const pageNum = parseInt(page);
+    const limitNum = parseInt(limit);
+    const offset = (pageNum - 1) * limitNum;
+    
+    // Verify that the requesting user matches the userId or is an admin
+    if (req.user.uid !== userId && !req.user.admin) {
+      return res.status(403).json({ error: 'Forbidden: You can only access your own orders' });
+    }
+    
+    // Query to get orders for this user
+    let ordersQuery = db.collection('orders')
+      .where('customerId', '==', userId)
+      .orderBy('createdAt', 'desc');
+    
+    // Add status filter if provided
+    if (status) {
+      ordersQuery = ordersQuery.where('status', '==', status);
+    }
+    
+    // Get total count first (for pagination)
+    const totalSnapshot = await ordersQuery.get();
+    const totalOrders = totalSnapshot.size;
+    
+    // Then get paginated results
+    const ordersSnapshot = await ordersQuery
+      .limit(limitNum)
+      .offset(offset)
+      .get();
+    
+    // Process orders
+    const orders = [];
+    for (const doc of ordersSnapshot.docs) {
+      const orderData = doc.data();
+      
+      // Format the order data for the frontend
+      orders.push({
+        id: doc.id,
+        orderId: orderData.orderId,
+        date: orderData.createdAt ? orderData.createdAt.toDate() : null,
+        status: orderData.status,
+        paymentStatus: orderData.paymentStatus,
+        paymentMethod: orderData.paymentMethod,
+        totalAmount: orderData.totalAmount,
+        items: orderData.items.map(item => ({
+          productId: item.productId,
+          productName: item.productName,
+          productImage: item.productImage,
+          quantity: item.quantity,
+          price: item.price,
+          shade: item.shade,
+          shadeId: item.shadeId
+        })),
+        shippingAddress: orderData.shippingAddress,
+        billingAddress: orderData.billingAddress,
+        razorpayOrderId: orderData.razorpayOrderId,
+        razorpayPaymentId: orderData.razorpayPaymentId,
+        zohoInvoiceId: orderData.zohoInvoiceId,
+        zohoSalesOrderId: orderData.zohoSalesOrderId
+      });
+    }
+    
+    // Return paginated results with metadata
+    res.json({
+      orders,
+      pagination: {
+        total: totalOrders,
+        page: pageNum,
+        limit: limitNum,
+        pages: Math.ceil(totalOrders / limitNum)
+      }
+    });
+  } catch (error) {
+    console.error('Error fetching user orders:', error);
+    res.status(500).json({ error: 'Failed to fetch user orders', message: error.message });
+  }
+});
+
+// Get specific order details
+router.get('/users/:userId/orders/:orderId', verifyFirebaseToken, async (req, res) => {
+  try {
+    const { userId, orderId } = req.params;
+    
+    // Verify that the requesting user matches the userId or is an admin
+    if (req.user.uid !== userId && !req.user.admin) {
+      return res.status(403).json({ error: 'Forbidden: You can only access your own orders' });
+    }
+    
+    // Query for the specific order
+    const orderSnapshot = await db.collection('orders')
+      .where('user_id', '==', userId)
+      .where('orderId', '==', orderId)
+      .limit(1)
+      .get();
+    
+    if (orderSnapshot.empty) {
+      return res.status(404).json({ error: 'Order not found' });
+    }
+    
+    const orderDoc = orderSnapshot.docs[0];
+    const orderData = orderDoc.data();
+    
+    // Format the order data for the frontend
+    const orderDetails = {
+      id: orderDoc.id,
+      orderId: orderData.orderId,
+      date: orderData.createdAt ? orderData.createdAt.toDate() : null,
+      status: orderData.status,
+      paymentStatus: orderData.paymentStatus,
+      paymentMethod: orderData.paymentMethod,
+      totalAmount: orderData.totalAmount,
+      items: orderData.items.map(item => ({
+        productId: item.productId,
+        productName: item.productName,
+        productImage: item.productImage,
+        quantity: item.quantity,
+        price: item.price,
+        shade: item.shade,
+        shadeId: item.shadeId,
+        subtotal: item.quantity * item.price
+      })),
+      shippingAddress: orderData.shippingAddress,
+      billingAddress: orderData.billingAddress,
+      razorpayOrderId: orderData.razorpayOrderId,
+      razorpayPaymentId: orderData.razorpayPaymentId,
+      zohoInvoiceId: orderData.zohoInvoiceId,
+      zohoSalesOrderId: orderData.zohoSalesOrderId
+    };
+    
+    // If there's a Zoho invoice ID, try to get invoice details
+    if (orderData.zohoInvoiceId) {
+      try {
+        // Get Zoho tokens
+        const tokensRef = db.collection('system').doc('zoho_tokens');
+        const tokensDoc = await tokensRef.get();
+        
+        if (tokensDoc.exists) {
+          const tokens = tokensDoc.data();
+          const axios = require('axios');
+          
+          const invoiceResponse = await axios.get(
+            `https://www.zohoapis.in/inventory/v1/invoices/${orderData.zohoInvoiceId}`,
+            {
+              headers: {
+                'Authorization': `Zoho-oauthtoken ${tokens.access_token}`,
+                'Content-Type': 'application/json',
+                'organization_id': process.env.ZOHO_ORGANIZATION_ID || '60038401466'
+              }
+            }
+          );
+          
+          if (invoiceResponse.data && invoiceResponse.data.invoice) {
+            orderDetails.zohoInvoiceDetails = invoiceResponse.data.invoice;
+          }
+        }
+      } catch (zohoError) {
+        console.error('Error fetching Zoho invoice details:', zohoError);
+        // Continue without Zoho details if there's an error
+      }
+    }
+    
+    res.json(orderDetails);
+  } catch (error) {
+    console.error('Error fetching order details:', error);
+    res.status(500).json({ error: 'Failed to fetch order details', message: error.message });
+  }
+});
+
 module.exports = router;
