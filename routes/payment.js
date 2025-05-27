@@ -450,7 +450,8 @@ router.get('/orders/sales', verifyFirebaseToken, async (req, res) => {
             local_order_id: localOrdersSnapshot.docs[0].id,
             razorpay_payment_id: localOrderData.razorpayPaymentId,
             customer_email: localOrderData.user_email,
-            items_detail: localOrderData.items
+            items_detail: localOrderData.items,
+            paymentMethod : localOrderData.paymentMethod
           };
         }
         
