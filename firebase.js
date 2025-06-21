@@ -13,10 +13,10 @@ try {
   // First try to use environment variables
   if (process.env.FIREBASE_PROJECT_ID && process.env.FIREBASE_PRIVATE_KEY && process.env.FIREBASE_CLIENT_EMAIL) {
     console.log('Initializing Firebase with environment variables');
-    
+
     // Make sure to properly format the private key
     const privateKey = process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, '\n');
-    
+
     const firebaseConfig = {
       credential: admin.credential.cert({
         type: process.env.FIREBASE_TYPE,
@@ -34,22 +34,22 @@ try {
       databaseURL: `https://${process.env.FIREBASE_PROJECT_ID}.firebaseio.com`,
       projectId: process.env.FIREBASE_PROJECT_ID
     };
-    
+
     firebaseApp = admin.initializeApp(firebaseConfig);
-  } 
+  }
   // Fall back to service account file
   else {
     console.log('Environment variables not found, trying service account file');
   }
-  
+
   // Initialize Firestore
   db = admin.firestore();
-  
+
   // Configure Firestore settings
   db.settings({
     ignoreUndefinedProperties: true
   });
-  
+
   // Test the connection
   db.collection('customers').get()
     .then(snapshot => {
@@ -58,10 +58,10 @@ try {
     .catch(error => {
       console.error('Firestore connection error:', error);
     });
-  
+
 } catch (error) {
   console.error('Error initializing Firebase:', error);
-  
+
   // Create a dummy db object that logs errors when used
   db = {
     collection: () => {

@@ -11,8 +11,11 @@ const admin = require('firebase-admin');
 const profileRoutes = require('./routes/profile');
 const paymentRoutes = require('./routes/payment');
 const productRoutes = require('./routes/products');
-const customerRoutes = require('./routes/zoho')
+const customerRoutes = require('./routes/zoho');
 const adminRoutes = require('./routes/admin');
+const packageRoutes = require('./routes/packages');
+const shipmentRoutes = require('./routes/shipments');
+
 // Load environment variables - make sure this is at the top
 dotenv.config({ path: path.join(__dirname, '.env') });
 
@@ -32,6 +35,10 @@ app.use(express.urlencoded({ extended: true }));
 app.use('/api', profileRoutes);
 app.use('/api', paymentRoutes);
 app.use('/api', productRoutes);
+app.use('/api', customerRoutes);
+app.use('/api/admin', adminRoutes);
+app.use('/api/packages', packageRoutes);
+app.use('/api/shipments', shipmentRoutes);
 app.use('/api', customerRoutes)
 app.use('/api/admin', adminRoutes);
 // Home route
@@ -303,6 +310,11 @@ const verifyFirebaseToken = async (req, res, next) => {
 
 app.use('/api', profileRoutes);
 app.use('/api', paymentRoutes);
+app.use('/api', productRoutes);
+app.use('/api', customerRoutes);
+app.use('/api/admin', adminRoutes);
+app.use('/api/packages', packageRoutes);
+app.use('/api/shipments', shipmentRoutes);
 // Home route
 app.get('/', (req, res) => {
   res.send(`
