@@ -83,23 +83,22 @@ const getShipRocketToken = async () => {
 // Create a shipment directly in ShipRocket
 router.post('/create', verifyFirebaseToken, verifyAdmin, async (req, res) => {
   try {
+    console.log("req.body", req.body);
     const {
       // Order Information
       orderId,
       orderDate,
 
       // Customer Information
-      customerName,
-      customerPhone,
-      customerEmail,
-
-      // Addresses
-      shippingAddress,
-      billingAddress,
+      customerData,
       pickupLocation,
 
       // Order Items
       orderItems,
+
+      // Addresses
+      shippingAddress,
+      billingAddress,
 
       // Package Information
       weight,
@@ -156,7 +155,7 @@ router.post('/create', verifyFirebaseToken, verifyAdmin, async (req, res) => {
       pickup_location: "Home",
 
       // Billing Information
-      billing_customer_name: billingAddress?.name || customerName || "John Doe",
+      billing_customer_name: customerData.contactName,
       billing_last_name: "",
       billing_address: billingAddress ? formatAddress(billingAddress).address : "123 Test Street",
       billing_address_2: billingAddress ? formatAddress(billingAddress).address_2 : "",
@@ -164,11 +163,11 @@ router.post('/create', verifyFirebaseToken, verifyAdmin, async (req, res) => {
       billing_pincode: billingAddress?.pinCode || billingAddress?.zipCode || "400001",
       billing_state: billingAddress?.state || "Maharashtra",
       billing_country: billingAddress?.country || "India",
-      billing_phone: billingAddress?.phone || customerPhone || "9876543210",
-      billing_email: customerEmail || "customer@example.com",
+      billing_phone: customerData.phone,
+      billing_email: customerData.email || "customer@example.com",
 
       // Shipping Information
-      shipping_customer_name: shippingAddress?.name || customerName || "John Doe",
+      shipping_customer_name: customerData.contactName,
       shipping_last_name: "",
       shipping_address: formatAddress(shippingAddress).address || "123 Test Street",
       shipping_address_2: formatAddress(shippingAddress).address_2,
@@ -176,8 +175,8 @@ router.post('/create', verifyFirebaseToken, verifyAdmin, async (req, res) => {
       shipping_pincode: shippingAddress?.pinCode || shippingAddress?.zipCode || "400001",
       shipping_state: shippingAddress?.state || "Maharashtra",
       shipping_country: shippingAddress?.country || "India",
-      shipping_phone: shippingAddress?.phone || customerPhone || "9876543210",
-      shipping_email: customerEmail || "customer@example.com",
+      shipping_phone: customerData.phone,
+      shipping_email: customerData.email || "customer@example.com",
 
       // Order Items - validate and format
       order_items: orderItems.map((item, index) => ({
@@ -191,7 +190,7 @@ router.post('/create', verifyFirebaseToken, verifyAdmin, async (req, res) => {
       })),
 
       // Payment and charges
-      payment_method: paymentMethod || "Prepaid",
+      payment_method: (paymentMethod === "razorpay") ? "Prepaid" : "COD",
       shipping_is_billing: true,
       shipping_charges: shippingCharges || 0,
       giftwrap_charges: 0,
@@ -206,7 +205,7 @@ router.post('/create', verifyFirebaseToken, verifyAdmin, async (req, res) => {
       weight: weight || 500
     };
 
-    // console.log('ShipRocket Order Data:', JSON.stringify(shipRocketOrderData, null, 2));
+    console.log('ShipRocket Order Data:', JSON.stringify(shipRocketOrderData, null, 2));
 
     // Create order in ShipRocket
     const shipRocketOrderResponse = await axios.post(
@@ -232,9 +231,9 @@ router.post('/create', verifyFirebaseToken, verifyAdmin, async (req, res) => {
       expectedDeliveryDate: expectedDeliveryDate || '',
       status: 'created',
       customerInfo: {
-        name: customerName || "John Doe",
-        phone: customerPhone || "9876543210",
-        email: customerEmail || "customer@example.com"
+        name: customerData.contactName,
+        phone: customerData.phone,
+        email: customerData.email
       },
       shippingAddress: shippingAddress,
       billingAddress: billingAddress,

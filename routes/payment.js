@@ -9,13 +9,13 @@ const axios = require('axios');
 // Firebase Auth verification middleware
 const verifyFirebaseToken = async (req, res, next) => {
   const authHeader = req.headers.authorization;
-  
+
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
     return res.status(401).json({ error: 'Unauthorized: No token provided' });
   }
-  
+
   const token = authHeader.split('Bearer ')[1];
-  
+
   try {
     const decodedToken = await admin.auth().verifyIdToken(token);
     req.user = decodedToken;
@@ -36,7 +36,7 @@ const razorpay = new Razorpay({
 router.post('/payment/create-order', verifyFirebaseToken, async (req, res) => {
   try {
     const { amount, currency, items } = req.body;
-    
+
     // Create order options
     const options = {
       amount: amount, // amount in smallest currency unit (paise)
@@ -47,10 +47,10 @@ router.post('/payment/create-order', verifyFirebaseToken, async (req, res) => {
         user_email: req.user.email
       }
     };
-    
+
     // Create order in Razorpay
     const order = await razorpay.orders.create(options);
-    
+
     // Store order in Firestore for reference
     await db.collection('razorpay_orders').doc(order.id).set({
       orderId: order.id,
@@ -62,7 +62,7 @@ router.post('/payment/create-order', verifyFirebaseToken, async (req, res) => {
       user_email: req.user.email,
       user_id: req.user.uid
     });
-    
+
     res.json(order);
   } catch (error) {
     console.error('Error creating Razorpay order:', error);
@@ -73,15 +73,15 @@ router.post('/payment/create-order', verifyFirebaseToken, async (req, res) => {
 // Create order and verify payment
 router.post('/orders/create', verifyFirebaseToken, async (req, res) => {
   try {
-    const { 
-      orderItems, 
-      totalAmount, 
-      customerId, 
-      shippingAddress, 
+    const {
+      orderItems,
+      totalAmount,
+      customerId,
+      shippingAddress,
       billingAddress,
       paymentMethod
     } = req.body;
-    
+
     // Check if this is a COD order or a Razorpay order
     if (paymentMethod === 'cod') {
       // Create order in Firestore for COD
@@ -100,19 +100,19 @@ router.post('/orders/create', verifyFirebaseToken, async (req, res) => {
         user_email: req.user.email,
         user_id: req.user.uid
       };
-      
+
       const newOrderRef = await db.collection('orders').add(orderData);
-      
+
       // Create sales order in Zoho Inventory if customerId exists
       if (customerId) {
         try {
           // Get tokens for Zoho API
           const tokensRef = db.collection('system').doc('zoho_tokens');
           const tokensDoc = await tokensRef.get();
-          
+
           if (tokensDoc.exists) {
             const tokens = tokensDoc.data();
-            
+
             // Prepare line items for Zoho
             const lineItems = orderItems.map(item => ({
               item_id: item.productId,
@@ -121,7 +121,7 @@ router.post('/orders/create', verifyFirebaseToken, async (req, res) => {
               rate: item.price,
               description: `Shade: ${item.shade || 'N/A'}`
             }));
-            
+
             // Create sales order in Zoho
             const salesOrderData = {
               customer_id: customerId,
@@ -134,7 +134,7 @@ router.post('/orders/create', verifyFirebaseToken, async (req, res) => {
               payment_terms: 0, // Due on delivery
               payment_terms_label: "Due on Delivery"
             };
-            
+
             const zohoResponse = await axios.post(
               'https://www.zohoapis.in/inventory/v1/salesorders',
               salesOrderData,
@@ -146,7 +146,7 @@ router.post('/orders/create', verifyFirebaseToken, async (req, res) => {
                 }
               }
             );
-            
+
             // Update order with Zoho sales order ID
             let zohoSalesOrderId = null;
             if (zohoResponse.data && zohoResponse.data.salesorder) {
@@ -154,7 +154,7 @@ router.post('/orders/create', verifyFirebaseToken, async (req, res) => {
               await newOrderRef.update({
                 zohoSalesOrderId: zohoSalesOrderId
               });
-              
+
               // Create Invoice with "Unpaid" status for COD
               const invoiceData = {
                 customer_id: customerId,
@@ -171,7 +171,7 @@ router.post('/orders/create', verifyFirebaseToken, async (req, res) => {
                 status: "unpaid", // Set status as unpaid for COD
                 payment_expected_date: new Date().toISOString().split('T')[0] // Set expected payment date to today
               };
-              
+
               const invoiceResponse = await axios.post(
                 'https://www.zohoapis.in/inventory/v1/invoices',
                 invoiceData,
@@ -183,7 +183,7 @@ router.post('/orders/create', verifyFirebaseToken, async (req, res) => {
                   }
                 }
               );
-              
+
               // Store invoice ID in Firestore
               if (invoiceResponse.data && invoiceResponse.data.invoice) {
                 const invoiceId = invoiceResponse.data.invoice.invoice_id;
@@ -198,9 +198,9 @@ router.post('/orders/create', verifyFirebaseToken, async (req, res) => {
           // Continue with order creation even if Zoho integration fails
         }
       }
-      
-      res.status(201).json({ 
-        success: true, 
+
+      res.status(201).json({
+        success: true,
         message: 'COD Order created successfully',
         orderId: orderData.orderId
       });
@@ -212,19 +212,19 @@ router.post('/orders/create', verifyFirebaseToken, async (req, res) => {
       const generated_signature = crypto.createHmac('sha256', "En7j4s7kTCKeIk6Go25vvwuX")
         .update(paymentResponse.razorpay_order_id + '|' + paymentResponse.razorpay_payment_id)
         .digest('hex');
-      
+
       if (generated_signature !== paymentResponse.razorpay_signature) {
         return res.status(400).json({ error: 'Invalid payment signature' });
       }
-      
+
       // Get Razorpay order details from Firestore
       const orderRef = db.collection('razorpay_orders').doc(paymentResponse.razorpay_order_id);
       const orderDoc = await orderRef.get();
-      
+
       if (!orderDoc.exists) {
         return res.status(404).json({ error: 'Order not found' });
       }
-      
+
       // Create order in Firestore
       const orderData = {
         orderId: 'ORD' + Date.now(),
@@ -243,9 +243,9 @@ router.post('/orders/create', verifyFirebaseToken, async (req, res) => {
         user_email: req.user.email,
         user_id: req.user.uid
       };
-      
+
       const newOrderRef = await db.collection('orders').add(orderData);
-      
+
       // Update Razorpay order status
       await orderRef.update({
         payment_id: paymentResponse.razorpay_payment_id,
@@ -253,17 +253,17 @@ router.post('/orders/create', verifyFirebaseToken, async (req, res) => {
         status: 'paid',
         order_document_id: newOrderRef.id
       });
-      
+
       // Create sales order in Zoho Inventory if customerId exists
       if (customerId) {
         try {
           // Get tokens for Zoho API
           const tokensRef = db.collection('system').doc('zoho_tokens');
           const tokensDoc = await tokensRef.get();
-          
+
           if (tokensDoc.exists) {
             const tokens = tokensDoc.data();
-            
+
             // Prepare line items for Zoho
             const lineItems = orderItems.map(item => ({
               item_id: item.productId,
@@ -272,7 +272,7 @@ router.post('/orders/create', verifyFirebaseToken, async (req, res) => {
               rate: item.price,
               description: `Shade: ${item.shade || 'N/A'}`
             }));
-            
+
             // Create sales order in Zoho
             const salesOrderData = {
               customer_id: customerId,
@@ -283,7 +283,7 @@ router.post('/orders/create', verifyFirebaseToken, async (req, res) => {
               billing_address: billingAddress,
               shipping_address: shippingAddress
             };
-            
+
             const zohoResponse = await axios.post(
               'https://www.zohoapis.in/inventory/v1/salesorders',
               salesOrderData,
@@ -295,7 +295,7 @@ router.post('/orders/create', verifyFirebaseToken, async (req, res) => {
                 }
               }
             );
-            
+
             // Update order with Zoho sales order ID
             let zohoSalesOrderId = null;
             if (zohoResponse.data && zohoResponse.data.salesorder) {
@@ -303,7 +303,7 @@ router.post('/orders/create', verifyFirebaseToken, async (req, res) => {
               await newOrderRef.update({
                 zohoSalesOrderId: zohoSalesOrderId
               });
-              
+
               // Create Invoice with "Unpaid" status first
               const invoiceData = {
                 customer_id: customerId,
@@ -320,7 +320,7 @@ router.post('/orders/create', verifyFirebaseToken, async (req, res) => {
                 status: "paid", // Explicitly set status as unpaid
                 payment_expected_date: new Date().toISOString().split('T')[0] // Set expected payment date to today
               };
-              
+
               const invoiceResponse = await axios.post(
                 'https://www.zohoapis.in/inventory/v1/invoices',
                 invoiceData,
@@ -332,14 +332,14 @@ router.post('/orders/create', verifyFirebaseToken, async (req, res) => {
                   }
                 }
               );
-              
+
               // Store invoice ID in Firestore
               if (invoiceResponse.data && invoiceResponse.data.invoice) {
                 const invoiceId = invoiceResponse.data.invoice.invoice_id;
                 await newOrderRef.update({
                   zohoInvoiceId: invoiceId
                 });
-                
+
                 // Create Customer Payment (mark invoice as paid)
                 const paymentDate = new Date().toISOString().split('T')[0];
                 const paymentData = {
@@ -358,7 +358,7 @@ router.post('/orders/create', verifyFirebaseToken, async (req, res) => {
                   exchange_rate: 1,
                   bank_charges: 0
                 };
-                
+
                 const paymentResult = await axios.post(
                   'https://www.zohoapis.in/inventory/v1/customerpayments',
                   paymentData,
@@ -370,7 +370,7 @@ router.post('/orders/create', verifyFirebaseToken, async (req, res) => {
                     }
                   }
                 );
-                
+
                 // Store payment ID in Firestore
                 if (paymentResult.data && paymentResult.data.payment) {
                   await newOrderRef.update({
@@ -385,9 +385,9 @@ router.post('/orders/create', verifyFirebaseToken, async (req, res) => {
           // Continue with order creation even if Zoho integration fails
         }
       }
-      
-      res.status(201).json({ 
-        success: true, 
+
+      res.status(201).json({
+        success: true,
         message: 'Order created successfully',
         orderId: orderData.orderId
       });
@@ -404,24 +404,24 @@ router.get('/orders/sales', verifyFirebaseToken, async (req, res) => {
     // Get tokens for Zoho API
     const tokensRef = db.collection('system').doc('zoho_tokens');
     const tokensDoc = await tokensRef.get();
-    
+
     if (!tokensDoc.exists) {
       return res.status(500).json({ error: 'Zoho authentication not available' });
     }
-    
+
     const tokens = tokensDoc.data();
-    
+
     // Optional query parameters
     const { page = 1, limit = 25, status, customer_id, date_start, date_end } = req.query;
-    
+
     // Build query string
     let queryParams = `?organization_id=${process.env.ZOHO_ORGANIZATION_ID || '60038401466'}&page=${page}&per_page=${limit}`;
-    
+
     if (status) queryParams += `&status=${status}`;
     if (customer_id) queryParams += `&customer_id=${customer_id}`;
     if (date_start) queryParams += `&date_start=${date_start}`;
     if (date_end) queryParams += `&date_end=${date_end}`;
-    
+
     // Fetch sales orders from Zoho
     const zohoResponse = await axios.get(
       `https://www.zohoapis.in/inventory/v1/salesorders`,
@@ -432,7 +432,7 @@ router.get('/orders/sales', verifyFirebaseToken, async (req, res) => {
         }
       }
     );
-    
+
     // Check if we have a valid response
     if (zohoResponse.data && zohoResponse.data.salesorders) {
       // Enhance the response with local order data if available
@@ -442,7 +442,7 @@ router.get('/orders/sales', verifyFirebaseToken, async (req, res) => {
           .where('orderId', '==', order.reference_number)
           .limit(1)
           .get();
-        
+
         if (!localOrdersSnapshot.empty) {
           const localOrderData = localOrdersSnapshot.docs[0].data();
           return {
@@ -451,13 +451,13 @@ router.get('/orders/sales', verifyFirebaseToken, async (req, res) => {
             razorpay_payment_id: localOrderData.razorpayPaymentId,
             customer_email: localOrderData.user_email,
             items_detail: localOrderData.items,
-            paymentMethod : localOrderData.paymentMethod
+            paymentMethod: localOrderData.paymentMethod
           };
         }
-        
+
         return order;
       }));
-      
+
       // Send enhanced response
       res.json({
         code: 0,
@@ -476,7 +476,7 @@ router.get('/orders/sales', verifyFirebaseToken, async (req, res) => {
     }
   } catch (error) {
     console.error('Error fetching sales orders:', error);
-    res.status(500).json({ 
+    res.status(500).json({
       error: 'Failed to fetch sales orders',
       message: error.message
     });
@@ -487,17 +487,17 @@ router.get('/orders/sales', verifyFirebaseToken, async (req, res) => {
 router.get('/orders/sales/:id', verifyFirebaseToken, async (req, res) => {
   try {
     const { id } = req.params;
-    
+
     // Get tokens for Zoho API
     const tokensRef = db.collection('system').doc('zoho_tokens');
     const tokensDoc = await tokensRef.get();
-    
+
     if (!tokensDoc.exists) {
       return res.status(500).json({ error: 'Zoho authentication not available' });
     }
-    
+
     const tokens = tokensDoc.data();
-    
+
     // Fetch specific sales order from Zoho
     const zohoResponse = await axios.get(
       `https://www.zohoapis.in/inventory/v1/salesorders/${id}?organization_id=${process.env.ZOHO_ORGANIZATION_ID || '60038401466'}`,
@@ -508,19 +508,40 @@ router.get('/orders/sales/:id', verifyFirebaseToken, async (req, res) => {
         }
       }
     );
-    
+
     // Check if we have a valid response
     if (zohoResponse.data && zohoResponse.data.salesorder) {
       const order = zohoResponse.data.salesorder;
-      
+
+      let customerData = null;
+      if (order.customer_id) {
+        try {
+          const customerDoc = await db.collection('customers').doc(order.customer_id).get();
+
+          if (customerDoc.exists) {
+            const customer = customerDoc.data();
+            console.log(customer);
+            customerData = {
+              email: customer.email || '',
+              phone: customer.phone || '',
+              contactName: customer.contactName,
+              billing_address: customer.zohoData.billing_address || '',
+              shipping_address: customer.zohoData.shipping_address || ''
+            };
+          }
+        } catch (customerError) {
+          console.error('Error fetching customer data:', customerError);
+        }
+      }
+
       // Try to find matching order in Firestore by reference number
       const localOrdersSnapshot = await db.collection('orders')
         .where('orderId', '==', order.reference_number)
         .limit(1)
         .get();
-      
+
       let enhancedOrder = order;
-      
+
       if (!localOrdersSnapshot.empty) {
         const localOrderData = localOrdersSnapshot.docs[0].data();
         enhancedOrder = {
@@ -530,11 +551,11 @@ router.get('/orders/sales/:id', verifyFirebaseToken, async (req, res) => {
           razorpay_order_id: localOrderData.razorpayOrderId,
           customer_email: localOrderData.user_email,
           items_detail: localOrderData.items,
-          shipping_address: localOrderData.shippingAddress,
-          billing_address: localOrderData.billingAddress
+          paymentMethod: localOrderData.paymentMethod,
+          customerData: customerData
         };
       }
-      
+
       // Send enhanced response
       res.json({
         code: 0,
@@ -546,7 +567,7 @@ router.get('/orders/sales/:id', verifyFirebaseToken, async (req, res) => {
     }
   } catch (error) {
     console.error('Error fetching sales order:', error);
-    res.status(500).json({ 
+    res.status(500).json({
       error: 'Failed to fetch sales order',
       message: error.message
     });

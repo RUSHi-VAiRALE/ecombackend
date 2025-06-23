@@ -53,7 +53,7 @@ const loadTokens = async () => {
   try {
     // First try to load from Firestore
     const tokenDoc = await db.collection('system').doc('zoho_tokens').get();
-    
+
     if (tokenDoc.exists) {
       tokens = tokenDoc.data();
       console.log('Loaded tokens from Firestore');
@@ -62,7 +62,7 @@ const loadTokens = async () => {
     }
   } catch (error) {
     console.error('Error loading tokens from Firestore:', error);
-    
+
     // Fall back to file if Firestore fails
     // if (fs.existsSync(tokenFilePath)) {
     //   try {
@@ -81,16 +81,16 @@ const saveTokens = async () => {
     // Save to Firestore
     await db.collection('system').doc('zoho_tokens').set({
       ...tokens,
-      createdAt:new Date()
+      createdAt: new Date()
     });
     console.log('Saved tokens to Firestore');
-    
+
     // Also save to file as backup
     //fs.writeFileSync(tokenFilePath, JSON.stringify(tokens, null, 2));
     console.log('Saved tokens to file (backup)');
   } catch (error) {
     console.error('Error saving tokens to Firestore:', error);
-    
+
     // Fall back to file if Firestore fails
     // try {
     //   fs.writeFileSync(tokenFilePath, JSON.stringify(tokens, null, 2));
@@ -108,7 +108,7 @@ loadTokens().catch(error => {
 
 // OAuth routes
 app.get('/auth/zoho', (req, res) => {
-  const authUrl = `https://accounts.zoho.com/oauth/v2/auth?scope=ZohoInventory.fullaccess.all&client_id=1000.E1FI8PQLI73ROCUKFFAPJO9O3ZPWNW&response_type=code&access_type=offline&redirect_uri=${API_URL}/auth/callback`;
+  const authUrl = `https://accounts.zoho.com/oauth/v2/auth?scope=ZohoInventory.fullaccess.all&client_id=1000.F1FYI4GJ8DGUDZ0WIN0AQELIP5IHZG&response_type=code&access_type=offline&redirect_uri=${API_URL}/auth/callback`;
   res.redirect(authUrl);
 });
 
@@ -120,13 +120,13 @@ app.get('/auth/callback', async (req, res) => {
   }
 
   try {
-    const response = await axios.post('https://accounts.zoho.in/oauth/v2/token',null ,{
+    const response = await axios.post('https://accounts.zoho.in/oauth/v2/token', null, {
       params: {
         grant_type: 'authorization_code',
         client_id: process.env.ZOHO_CLIENT_ID,
         client_secret: process.env.ZOHO_CLIENT_SECRET,
         redirect_uri: `${API_URL}/auth/callback`,
-        code : code
+        code: code
       }
     });
     console.log(response.data)
@@ -213,7 +213,7 @@ app.get('/api/products', ensureValidToken, async (req, res) => {
 app.post('/api/customers', ensureValidToken, async (req, res) => {
   try {
     const customerData = {
-      "contact_name": req.body.firstName +' '+req.body.lastName,
+      "contact_name": req.body.firstName + ' ' + req.body.lastName,
       "company_name": "ABC Company",
       "contact_type": "customer",
       "email": req.body.email,
@@ -221,7 +221,7 @@ app.post('/api/customers', ensureValidToken, async (req, res) => {
     }
     //Make request to Zoho Inventory API to create a contact (customer)
     const response = await axios.post(
-      'https://www.zohoapis.in/inventory/v1/contacts', 
+      'https://www.zohoapis.in/inventory/v1/contacts',
       customerData,
       {
         headers: {
@@ -233,11 +233,11 @@ app.post('/api/customers', ensureValidToken, async (req, res) => {
     );
 
     console.log(response.data);
-    
+
     // Store customer data in Firebase
     if (response.data && response.data.contact) {
       const zohoCustomer = response.data.contact;
-      
+
       // Create a document in Firestore with Zoho customer ID
       await db.collection('customers').doc(zohoCustomer.contact_id.toString()).set({
         zohoContactId: zohoCustomer.contact_id,
@@ -247,7 +247,7 @@ app.post('/api/customers', ensureValidToken, async (req, res) => {
         createdAt: new Date(),
         zohoData: zohoCustomer // Store the complete Zoho response for reference
       });
-      
+
       console.log('Customer data saved to Firebase');
     }
 
@@ -262,10 +262,10 @@ app.post('/api/customers', ensureValidToken, async (req, res) => {
 app.post('/api/salesorders', ensureValidToken, async (req, res) => {
   try {
     const salesOrderData = req.body;
-    
+
     // Make request to Zoho Inventory API to create a sales order
     const response = await axios.post(
-      'https://www.zohoapis.in/inventory/v1/salesorders', 
+      'https://www.zohoapis.in/inventory/v1/salesorders',
       salesOrderData,
       {
         headers: {
@@ -288,13 +288,13 @@ app.post('/api/salesorders', ensureValidToken, async (req, res) => {
 // Firebase Auth verification middleware
 const verifyFirebaseToken = async (req, res, next) => {
   const authHeader = req.headers.authorization;
-  
+
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
     return res.status(401).json({ error: 'Unauthorized: No token provided' });
   }
-  
+
   const token = authHeader.split('Bearer ')[1];
-  
+
   try {
     const decodedToken = await admin.auth().verifyIdToken(token);
     req.user = decodedToken;
