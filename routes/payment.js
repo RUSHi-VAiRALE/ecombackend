@@ -32,6 +32,42 @@ const razorpay = new Razorpay({
   key_secret: process.env.RAZORPAY_KEY_SECRET || 'En7j4s7kTCKeIk6Go25vvwuX'
 });
 
+// ShipRocket authentication function
+const getShipRocketToken = async () => {
+  // Check if we have a valid token in Firestore
+  const tokenRef = db.collection('system').doc('shiprocket_token');
+  const tokenDoc = await tokenRef.get();
+
+  if (tokenDoc.exists) {
+    const tokenData = tokenDoc.data();
+    // Check if token is still valid (not expired)
+    if (tokenData.expires_at && tokenData.expires_at > Date.now()) {
+      return tokenData.token;
+    }
+  }
+
+  // If no valid token, get a new one
+  const response = await axios.post('https://apiv2.shiprocket.in/v1/external/auth/login', {
+    email: "nikhil.zencodx@gmail.com",
+    password: "S9rIoU&iNayH!3Rj"
+  });
+
+  if (response.data && response.data.token) {
+    // Store token in Firestore with expiration (token valid for 24 hours)
+    console.log('ShipRocket token:', response.data);
+    const expiresAt = Date.now() + (24 * 60 * 60 * 1000);
+    await tokenRef.set({
+      token: response.data.token,
+      created_at: Date.now(),
+      expires_at: expiresAt
+    });
+
+    return response.data.token;
+  } else {
+    throw new Error('Failed to authenticate with ShipRocket');
+  }
+};
+
 // Create Razorpay order
 router.post('/payment/create-order', verifyFirebaseToken, async (req, res) => {
   try {
@@ -79,7 +115,14 @@ router.post('/orders/create', verifyFirebaseToken, async (req, res) => {
       customerId,
       shippingAddress,
       billingAddress,
-      paymentMethod
+      paymentMethod,
+      // Additional fields from new request structure
+      customer,
+      cartItems,
+      cartTotal,
+      shippingCharges,
+      discountAmount,
+      shiprocketData
     } = req.body;
 
     // Check if this is a COD order or a Razorpay order
@@ -89,7 +132,7 @@ router.post('/orders/create', verifyFirebaseToken, async (req, res) => {
       const orderData = {
         orderId: 'ORD' + Date.now(),
         paymentMethod: 'cod',
-        customerId: customerId,
+        customerId: customer?.customerId,
         items: orderItems,
         totalAmount: totalAmount,
         shippingAddress: shippingAddress,
@@ -102,6 +145,112 @@ router.post('/orders/create', verifyFirebaseToken, async (req, res) => {
       };
 
       const newOrderRef = await db.collection('orders').add(orderData);
+      //console.log(newOrderRef)
+      // Create ShipRocket order for COD
+      try {
+        const shipRocketToken = await getShipRocketToken();
+
+        // Format address for ShipRocket
+        const formatAddress = (address) => {
+          return {
+            name: address.name || customer?.customerName || 'Customer',
+            address: address.address || address.line1 || '',
+            address_2: address.address2 || address.line2 || '',
+            city: address.city || '',
+            state: address.state || '',
+            country: address.country || 'India',
+            pin_code: address.pinCode || address.zipCode || address.zip || address.postalCode || '',
+            phone: address.phone || customer?.customerPhone || ''
+          };
+        };
+
+        // Prepare ShipRocket order data
+        const shipRocketOrderData = {
+          order_id: orderData.orderId,
+          order_date: new Date().toISOString().split('T')[0],
+          pickup_location: "Home",
+
+          // Billing Information
+          billing_customer_name: customer?.customerName || 'Customer',
+          billing_last_name: "",
+          billing_address: billingAddress ? formatAddress(billingAddress).address : "123 Test Street",
+          billing_address_2: billingAddress ? formatAddress(billingAddress).address_2 : "",
+          billing_city: billingAddress?.city || "Mumbai",
+          billing_pincode: billingAddress?.pinCode || billingAddress?.zipCode || billingAddress?.zip || "400001",
+          billing_state: billingAddress?.state || "Maharashtra",
+          billing_country: billingAddress?.country || "India",
+          billing_phone: customer?.customerPhone || "9324554499",
+          billing_email: customer?.customerEmail || "customer@example.com",
+
+          // Shipping Information
+          shipping_customer_name: customer?.customerName || 'Customer',
+          shipping_last_name: "",
+          shipping_address: formatAddress(shippingAddress).address || "123 Test Street",
+          shipping_address_2: formatAddress(shippingAddress).address_2,
+          shipping_city: shippingAddress?.city || "Mumbai",
+          shipping_pincode: shippingAddress?.pinCode || shippingAddress?.zipCode || shippingAddress?.zip || "400001",
+          shipping_state: shippingAddress?.state || "Maharashtra",
+          shipping_country: shippingAddress?.country || "India",
+          shipping_phone: customer?.customerPhone || "9324554499",
+          shipping_email: customer?.customerEmail || "customer@example.com",
+
+          // Order Items - validate and format
+          order_items: orderItems.map((item, index) => ({
+            name: item.productName || item.name || `Product ${index + 1}`,
+            sku: item.productSku || item.sku || item.productId || `SKU-${Date.now()}-${index}`,
+            units: item.quantity || item.units || 1,
+            selling_price: item.unitPrice || item.price || item.selling_price || 100,
+            discount: item.productDiscount || item.discount || 0,
+            tax: item.productGst || item.tax || item.tax_amount || 0,
+            hsn: item.productHsn || item.hsn || ""
+          })),
+
+          // Payment and charges
+          payment_method: "COD",
+          shipping_is_billing: true,
+          shipping_charges: shippingCharges || 0,
+          giftwrap_charges: 0,
+          transaction_charges: 0,
+          total_discount: discountAmount || 0,
+          sub_total: cartTotal || totalAmount || orderItems.reduce((sum, item) => sum + ((item.unitPrice || item.price || 100) * (item.quantity || 1)), 0),
+
+          // Package dimensions (using default values from shiprocketData or fallbacks)
+          length: shiprocketData?.products?.[0]?.weight ? Math.max(shiprocketData.products[0].weight, 10) : 10,
+          breadth: shiprocketData?.products?.[0]?.weight ? Math.max(shiprocketData.products[0].weight, 10) : 10,
+          height: shiprocketData?.products?.[0]?.weight ? Math.max(shiprocketData.products[0].weight, 10) : 10,
+          weight: shiprocketData?.products?.[0]?.weight || orderItems.reduce((sum, item) => sum + (item.productWeight || 0.5), 0) || 0.5
+        };
+
+        console.log('ShipRocket Order Data:', JSON.stringify(shipRocketOrderData, null, 2));
+
+        // Create order in ShipRocket
+        const shipRocketOrderResponse = await axios.post(
+          'https://apiv2.shiprocket.in/v1/external/orders/create/adhoc',
+          shipRocketOrderData,
+          {
+            headers: {
+              'Authorization': `Bearer ${shipRocketToken}`,
+              'Content-Type': 'application/json'
+            }
+          }
+        );
+
+        console.log('ShipRocket Order Response:', shipRocketOrderResponse.data);
+
+        // Update order with ShipRocket data
+        await newOrderRef.update({
+          shipRocketOrderId: shipRocketOrderResponse.data?.order_id,
+          shipRocketShipmentId: shipRocketOrderResponse.data?.shipment_id,
+          trackingNumber: shipRocketOrderResponse.data?.tracking_number || '',
+          courierName: shipRocketOrderResponse.data?.courier_name || 'ShipRocket',
+          shipRocketData: shipRocketOrderResponse.data || {}
+        });
+
+      } catch (shipRocketError) {
+        console.error('Error creating ShipRocket order for COD:', shipRocketError);
+        console.error('ShipRocket Error response:', shipRocketError.response?.data);
+        // Continue with order creation even if ShipRocket integration fails
+      }
 
       // Create sales order in Zoho Inventory if customerId exists
       if (customerId) {
@@ -199,10 +348,17 @@ router.post('/orders/create', verifyFirebaseToken, async (req, res) => {
         }
       }
 
+      // Get the updated order data with ShipRocket info
+      const updatedOrderDoc = await newOrderRef.get();
+      const updatedOrderData = updatedOrderDoc.data();
+
       res.status(201).json({
         success: true,
         message: 'COD Order created successfully',
-        orderId: orderData.orderId
+        orderId: orderData.orderId,
+        shipRocketOrderId: updatedOrderData.shipRocketOrderId,
+        trackingNumber: updatedOrderData.trackingNumber,
+        courierName: updatedOrderData.courierName
       });
     } else {
       // This is the existing Razorpay payment flow
@@ -232,7 +388,7 @@ router.post('/orders/create', verifyFirebaseToken, async (req, res) => {
         razorpayPaymentId: paymentResponse.razorpay_payment_id,
         razorpaySignature: paymentResponse.razorpay_signature,
         paymentMethod: 'razorpay',
-        customerId: customerId,
+        customerId: customer?.customerId,
         items: orderItems,
         totalAmount: totalAmount,
         shippingAddress: shippingAddress,
@@ -254,142 +410,123 @@ router.post('/orders/create', verifyFirebaseToken, async (req, res) => {
         order_document_id: newOrderRef.id
       });
 
-      // Create sales order in Zoho Inventory if customerId exists
-      if (customerId) {
-        try {
-          // Get tokens for Zoho API
-          const tokensRef = db.collection('system').doc('zoho_tokens');
-          const tokensDoc = await tokensRef.get();
+      // Create ShipRocket order for Razorpay
+      try {
+        const shipRocketToken = await getShipRocketToken();
 
-          if (tokensDoc.exists) {
-            const tokens = tokensDoc.data();
+        // Format address for ShipRocket
+        const formatAddress = (address) => {
+          return {
+            name: address.name || customer?.customerName || 'Customer',
+            address: address.address || address.line1 || '',
+            address_2: address.address2 || address.line2 || '',
+            city: address.city || '',
+            state: address.state || '',
+            country: address.country || 'India',
+            pin_code: address.pinCode || address.zipCode || address.zip || address.postalCode || '',
+            phone: address.phone || customer?.customerPhone || ''
+          };
+        };
 
-            // Prepare line items for Zoho
-            const lineItems = orderItems.map(item => ({
-              item_id: item.productId,
-              name: item.productName,
-              quantity: item.quantity,
-              rate: item.price,
-              description: `Shade: ${item.shade || 'N/A'}`
-            }));
+        // Prepare ShipRocket order data
+        const shipRocketOrderData = {
+          order_id: orderData.orderId,
+          order_date: new Date().toISOString().split('T')[0],
+          pickup_location: "Home",
 
-            // Create sales order in Zoho
-            const salesOrderData = {
-              customer_id: customerId,
-              date: new Date().toISOString().split('T')[0],
-              line_items: lineItems,
-              reference_number: orderData.orderId,
-              notes: `Payment ID: ${paymentResponse.razorpay_payment_id}`,
-              billing_address: billingAddress,
-              shipping_address: shippingAddress
-            };
+          // Billing Information
+          billing_customer_name: customer?.customerName || 'Customer',
+          billing_last_name: "",
+          billing_address: billingAddress ? formatAddress(billingAddress).address : "123 Test Street",
+          billing_address_2: billingAddress ? formatAddress(billingAddress).address_2 : "",
+          billing_city: billingAddress?.city || "Mumbai",
+          billing_pincode: billingAddress?.pinCode || billingAddress?.zipCode || billingAddress?.zip || "400001",
+          billing_state: billingAddress?.state || "Maharashtra",
+          billing_country: billingAddress?.country || "India",
+          billing_phone: customer?.customerPhone || "9324554499",
+          billing_email: customer?.customerEmail || "customer@example.com",
 
-            const zohoResponse = await axios.post(
-              'https://www.zohoapis.in/inventory/v1/salesorders',
-              salesOrderData,
-              {
-                headers: {
-                  'Authorization': `Zoho-oauthtoken ${tokens.access_token}`,
-                  'Content-Type': 'application/json',
-                  'organization_id': process.env.ZOHO_ORGANIZATION_ID || '60038401466'
-                }
-              }
-            );
+          // Shipping Information
+          shipping_customer_name: customer?.customerName || 'Customer',
+          shipping_last_name: "",
+          shipping_address: formatAddress(shippingAddress).address || "123 Test Street",
+          shipping_address_2: formatAddress(shippingAddress).address_2,
+          shipping_city: shippingAddress?.city || "Mumbai",
+          shipping_pincode: shippingAddress?.pinCode || shippingAddress?.zipCode || shippingAddress?.zip || "400001",
+          shipping_state: shippingAddress?.state || "Maharashtra",
+          shipping_country: shippingAddress?.country || "India",
+          shipping_phone: customer?.customerPhone || "9324554499",
+          shipping_email: customer?.customerEmail || "customer@example.com",
 
-            // Update order with Zoho sales order ID
-            let zohoSalesOrderId = null;
-            if (zohoResponse.data && zohoResponse.data.salesorder) {
-              zohoSalesOrderId = zohoResponse.data.salesorder.salesorder_id;
-              await newOrderRef.update({
-                zohoSalesOrderId: zohoSalesOrderId
-              });
+          // Order Items - validate and format
+          order_items: orderItems.map((item, index) => ({
+            name: item.productName || item.name || `Product ${index + 1}`,
+            sku: item.productSku || item.sku || item.productId || `SKU-${Date.now()}-${index}`,
+            units: item.quantity || item.units || 1,
+            selling_price: item.unitPrice || item.price || item.selling_price || 100,
+            discount: item.productDiscount || item.discount || 0,
+            tax: item.productGst || item.tax || item.tax_amount || 0,
+            hsn: item.productHsn || item.hsn || ""
+          })),
 
-              // Create Invoice with "Unpaid" status first
-              const invoiceData = {
-                customer_id: customerId,
-                date: new Date().toISOString().split('T')[0],
-                line_items: lineItems,
-                reference_number: orderData.orderId,
-                notes: `Payment ID: ${paymentResponse.razorpay_payment_id}`,
-                payment_terms: 0, // Due on receipt
-                payment_terms_label: "Paid Online",
-                is_inclusive_tax: false,
-                salesperson_name: "Online Store",
-                billing_address: billingAddress,
-                shipping_address: shippingAddress,
-                status: "paid", // Explicitly set status as unpaid
-                payment_expected_date: new Date().toISOString().split('T')[0] // Set expected payment date to today
-              };
+          // Payment and charges
+          payment_method: "Prepaid",
+          shipping_is_billing: true,
+          shipping_charges: shippingCharges || 0,
+          giftwrap_charges: 0,
+          transaction_charges: 0,
+          total_discount: discountAmount || 0,
+          sub_total: cartTotal || totalAmount || orderItems.reduce((sum, item) => sum + ((item.unitPrice || item.price || 100) * (item.quantity || 1)), 0),
 
-              const invoiceResponse = await axios.post(
-                'https://www.zohoapis.in/inventory/v1/invoices',
-                invoiceData,
-                {
-                  headers: {
-                    'Authorization': `Zoho-oauthtoken ${tokens.access_token}`,
-                    'Content-Type': 'application/json',
-                    'organization_id': process.env.ZOHO_ORGANIZATION_ID || '60038401466'
-                  }
-                }
-              );
+          // Package dimensions (using default values from shiprocketData or fallbacks)
+          length: shiprocketData?.products?.[0]?.weight ? Math.max(shiprocketData.products[0].weight, 10) : 10,
+          breadth: shiprocketData?.products?.[0]?.weight ? Math.max(shiprocketData.products[0].weight, 10) : 10,
+          height: shiprocketData?.products?.[0]?.weight ? Math.max(shiprocketData.products[0].weight, 10) : 10,
+          weight: shiprocketData?.products?.[0]?.weight || orderItems.reduce((sum, item) => sum + (item.productWeight || 0.5), 0) || 0.5
+        };
 
-              // Store invoice ID in Firestore
-              if (invoiceResponse.data && invoiceResponse.data.invoice) {
-                const invoiceId = invoiceResponse.data.invoice.invoice_id;
-                await newOrderRef.update({
-                  zohoInvoiceId: invoiceId
-                });
+        console.log('ShipRocket Order Data (Razorpay):', JSON.stringify(shipRocketOrderData, null, 2));
 
-                // Create Customer Payment (mark invoice as paid)
-                const paymentDate = new Date().toISOString().split('T')[0];
-                const paymentData = {
-                  customer_id: customerId,
-                  payment_mode: "razorpay",
-                  amount: totalAmount, // Convert from paise to rupees
-                  date: paymentDate,
-                  reference_number: paymentResponse.razorpay_payment_id,
-                  description: `Payment for order ${orderData.orderId}`,
-                  invoices: [
-                    {
-                      invoice_id: invoiceId,
-                      amount_applied: totalAmount // Convert from paise to rupees
-                    }
-                  ],
-                  exchange_rate: 1,
-                  bank_charges: 0
-                };
-
-                const paymentResult = await axios.post(
-                  'https://www.zohoapis.in/inventory/v1/customerpayments',
-                  paymentData,
-                  {
-                    headers: {
-                      'Authorization': `Zoho-oauthtoken ${tokens.access_token}`,
-                      'Content-Type': 'application/json',
-                      'organization_id': process.env.ZOHO_ORGANIZATION_ID || '60038401466'
-                    }
-                  }
-                );
-
-                // Store payment ID in Firestore
-                if (paymentResult.data && paymentResult.data.payment) {
-                  await newOrderRef.update({
-                    zohoPaymentId: paymentResult.data.payment.payment_id
-                  });
-                }
-              }
+        // Create order in ShipRocket
+        const shipRocketOrderResponse = await axios.post(
+          'https://apiv2.shiprocket.in/v1/external/orders/create/adhoc',
+          shipRocketOrderData,
+          {
+            headers: {
+              'Authorization': `Bearer ${shipRocketToken}`,
+              'Content-Type': 'application/json'
             }
           }
-        } catch (zohoError) {
-          console.error('Error in Zoho integration:', zohoError);
-          // Continue with order creation even if Zoho integration fails
-        }
+        );
+
+        console.log('ShipRocket Order Response (Razorpay):', shipRocketOrderResponse.data);
+
+        // Update order with ShipRocket data
+        await newOrderRef.update({
+          shipRocketOrderId: shipRocketOrderResponse.data?.order_id,
+          shipRocketShipmentId: shipRocketOrderResponse.data?.shipment_id,
+          trackingNumber: shipRocketOrderResponse.data?.tracking_number || '',
+          courierName: shipRocketOrderResponse.data?.courier_name || 'ShipRocket',
+          shipRocketData: shipRocketOrderResponse.data || {}
+        });
+
+      } catch (shipRocketError) {
+        console.error('Error creating ShipRocket order for Razorpay:', shipRocketError);
+        console.error('ShipRocket Error response:', shipRocketError.response?.data);
+        // Continue with order creation even if ShipRocket integration fails
       }
+
+      // Get the updated order data with ShipRocket info
+      const updatedOrderDoc = await newOrderRef.get();
+      const updatedOrderData = updatedOrderDoc.data();
 
       res.status(201).json({
         success: true,
         message: 'Order created successfully',
-        orderId: orderData.orderId
+        orderId: orderData.orderId,
+        shipRocketOrderId: updatedOrderData.shipRocketOrderId,
+        trackingNumber: updatedOrderData.trackingNumber,
+        courierName: updatedOrderData.courierName
       });
     }
   } catch (error) {
