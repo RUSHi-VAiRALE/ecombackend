@@ -48,8 +48,8 @@ const getShipRocketToken = async () => {
 
   // If no valid token, get a new one
   const response = await axios.post('https://apiv2.shiprocket.in/v1/external/auth/login', {
-    email: "nikhil.zencodx@gmail.com",
-    password: "S9rIoU&iNayH!3Rj"
+    email: "princelookspure@gmail.com",
+    password: "UIw&ac@X&3UEeQqH"
   });
 
   if (response.data && response.data.token) {
