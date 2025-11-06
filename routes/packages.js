@@ -2,18 +2,17 @@ const express = require('express');
 const router = express.Router();
 const { db } = require('../firebase');
 const admin = require('firebase-admin');
-const axios = require('axios');
 
 // Firebase Auth verification middleware
 const verifyFirebaseToken = async (req, res, next) => {
   const authHeader = req.headers.authorization;
-  
+
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
     return res.status(401).json({ error: 'Unauthorized: No token provided' });
   }
-  
+
   const token = authHeader.split('Bearer ')[1];
-  
+
   try {
     const decodedToken = await admin.auth().verifyIdToken(token);
     req.user = decodedToken;
@@ -32,23 +31,11 @@ const verifyAdmin = async (req, res, next) => {
   next();
 };
 
-// Get Zoho tokens helper function
-const getZohoTokens = async () => {
-  const tokensRef = db.collection('system').doc('zoho_tokens');
-  const tokensDoc = await tokensRef.get();
-  
-  if (!tokensDoc.exists) {
-    throw new Error('Zoho authentication not available');
-  }
-  
-  return tokensDoc.data();
-};
-
-// Create a new package in Zoho
+// Create a new package
 router.post('/create', verifyFirebaseToken, verifyAdmin, async (req, res) => {
   try {
     const {
-      salesOrderId,
+      orderId,
       packageName,
       packageNumber,
       length,
@@ -57,62 +44,33 @@ router.post('/create', verifyFirebaseToken, verifyAdmin, async (req, res) => {
       weight,
       items
     } = req.body;
-    console.log("reqBody : " ,req.body)
+
     // Validate required fields
-    if (!salesOrderId) {
-      return res.status(400).json({ error: 'Sales order ID is required' });
+    if (!orderId) {
+      return res.status(400).json({ error: 'Order ID is required' });
     }
     if (!items || !Array.isArray(items) || items.length === 0) {
       return res.status(400).json({ error: 'Package items are required' });
     }
 
-    // Get Zoho tokens
-    const tokens = await getZohoTokens();
+    // Verify order exists
+    const orderSnapshot = await db.collection('orders')
+      .where('orderId', '==', orderId)
+      .limit(1)
+      .get();
 
-    // Prepare package data
-    const packageData = {
-      salesorder_id: salesOrderId,
-      date: new Date().toISOString().split('T')[0],
-      package_name: packageName || `Package for ${salesOrderId}`,
-      line_items: items.map(item => ({
-        so_line_item_id: item.lineItemId,
-        quantity: item.quantity
-      })),
-      dimensions: {
-        length: length || 10,
-        width: width || 10,
-        height: height || 10,
-        unit: "cm"
-      },
-      weight: {
-        weight: weight || 500,
-        unit: "g"
-      }
-    };
-
-    // Use axios to make the request to Zoho
-    const zohoResponse = await axios.post(
-      `https://www.zohoapis.in/inventory/v1/packages?organization_id=${process.env.ZOHO_ORGANIZATION_ID || '60038401466'}&salesorder_id=${salesOrderId}`,
-      packageData,
-      {
-        headers: {
-          "Authorization": `Zoho-oauthtoken ${tokens.access_token}`,
-          "content-type": "application/json"
-        }
-      }
-    );
-
-    if (!zohoResponse.data || !zohoResponse.data.package) {
-      return res.status(500).json({ error: 'Failed to create package in Zoho', zohoResponse: zohoResponse.data });
+    if (orderSnapshot.empty) {
+      return res.status(404).json({ error: 'Order not found' });
     }
 
+    // Generate package number if not provided
+    const generatedPackageNumber = packageNumber || `PKG-${Date.now()}`;
+
     // Store package data in Firestore
-    const zohoPackage = zohoResponse.data.package;
-    await db.collection('packages').add({
-      zohoPackageId: zohoPackage.package_id,
-      zohoSalesOrderId: salesOrderId,
-      packageName: packageName || `Package for ${salesOrderId}`,
-      packageNumber: packageNumber || `PKG-${Date.now()}`,
+    const packageRef = await db.collection('packages').add({
+      orderId: orderId,
+      packageName: packageName || `Package for ${orderId}`,
+      packageNumber: generatedPackageNumber,
       dimensions: {
         length: length || 10,
         width: width || 10,
@@ -124,22 +82,27 @@ router.post('/create', verifyFirebaseToken, verifyAdmin, async (req, res) => {
         unit: "g"
       },
       items: items,
-      status: zohoPackage.status || 'created',
+      status: 'created',
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
-      createdBy: req.user.uid,
-      zohoData: zohoPackage
+      createdBy: req.user.uid
     });
 
     res.status(201).json({
       success: true,
       message: 'Package created successfully',
-      package: zohoPackage
+      packageId: packageRef.id,
+      package: {
+        id: packageRef.id,
+        orderId: orderId,
+        packageName: packageName || `Package for ${orderId}`,
+        packageNumber: generatedPackageNumber
+      }
     });
   } catch (error) {
     console.error('Error creating package:', error);
     res.status(500).json({
       error: 'Failed to create package',
-      message: error.response?.data?.message || error.message
+      message: error.message
     });
   }
 });
@@ -147,35 +110,42 @@ router.post('/create', verifyFirebaseToken, verifyAdmin, async (req, res) => {
 // Get all packages
 router.get('/', verifyFirebaseToken, async (req, res) => {
   try {
-    const { page = 1, limit = 25, salesOrderId } = req.query;
-    
-    // Get Zoho tokens
-    const tokens = await getZohoTokens();
-    
-    // Build query string
-    let queryParams = `?organization_id=${process.env.ZOHO_ORGANIZATION_ID || '60038401466'}&page=${page}&per_page=${limit}`;
-    
-    if (salesOrderId) {
-      queryParams += `&salesorder_id=${salesOrderId}`;
+    const { page = 1, limit = 25, orderId } = req.query;
+    const pageNum = parseInt(page);
+    const limitNum = parseInt(limit);
+
+    let query = db.collection('packages').orderBy('createdAt', 'desc');
+
+    if (orderId) {
+      query = query.where('orderId', '==', orderId);
     }
-    
-    // Fetch packages from Zoho
-    const zohoResponse = await axios.get(
-      `https://www.zohoapis.in/inventory/v1/packages${queryParams}`,
-      {
-        headers: {
-          'Authorization': `Zoho-oauthtoken ${tokens.access_token}`,
-          'Content-Type': 'application/json'
-        }
-      }
-    );
-    
-    res.json(zohoResponse.data);
+
+    const snapshot = await query
+      .limit(limitNum)
+      .offset((pageNum - 1) * limitNum)
+      .get();
+
+    const packages = [];
+    snapshot.forEach(doc => {
+      const data = doc.data();
+      packages.push({
+        id: doc.id,
+        ...data,
+        createdAt: data.createdAt?.toDate?.() || null
+      });
+    });
+
+    res.json({
+      packages: packages,
+      page: pageNum,
+      limit: limitNum,
+      total: packages.length
+    });
   } catch (error) {
     console.error('Error fetching packages:', error);
-    res.status(500).json({ 
-      error: 'Failed to fetch packages', 
-      message: error.response?.data?.message || error.message 
+    res.status(500).json({
+      error: 'Failed to fetch packages',
+      message: error.message
     });
   }
 });
@@ -184,27 +154,24 @@ router.get('/', verifyFirebaseToken, async (req, res) => {
 router.get('/:id', verifyFirebaseToken, async (req, res) => {
   try {
     const { id } = req.params;
-    
-    // Get Zoho tokens
-    const tokens = await getZohoTokens();
-    
-    // Fetch package from Zoho
-    const zohoResponse = await axios.get(
-      `https://www.zohoapis.in/inventory/v1/packages/${id}?organization_id=${process.env.ZOHO_ORGANIZATION_ID || '60038401466'}`,
-      {
-        headers: {
-          'Authorization': `Zoho-oauthtoken ${tokens.access_token}`,
-          'Content-Type': 'application/json'
-        }
-      }
-    );
-    
-    res.json(zohoResponse.data);
+
+    const packageDoc = await db.collection('packages').doc(id).get();
+
+    if (!packageDoc.exists) {
+      return res.status(404).json({ error: 'Package not found' });
+    }
+
+    const packageData = packageDoc.data();
+    res.json({
+      id: packageDoc.id,
+      ...packageData,
+      createdAt: packageData.createdAt?.toDate?.() || null
+    });
   } catch (error) {
     console.error('Error fetching package:', error);
-    res.status(500).json({ 
-      error: 'Failed to fetch package', 
-      message: error.response?.data?.message || error.message 
+    res.status(500).json({
+      error: 'Failed to fetch package',
+      message: error.message
     });
   }
 });
@@ -219,107 +186,92 @@ router.put('/:id', verifyFirebaseToken, verifyAdmin, async (req, res) => {
       width,
       height,
       weight,
-      items
+      items,
+      status
     } = req.body;
-    
-    // Get Zoho tokens
-    const tokens = await getZohoTokens();
-    
-    // Prepare update data
-    const updateData = {};
-    
-    if (packageName) updateData.package_name = packageName;
-    
+
+    const packageRef = db.collection('packages').doc(id);
+    const packageDoc = await packageRef.get();
+
+    if (!packageDoc.exists) {
+      return res.status(404).json({ error: 'Package not found' });
+    }
+
+    const updateFields = {};
+
+    if (packageName) updateFields.packageName = packageName;
+
     if (length || width || height) {
-      updateData.dimensions = {
-        length: length || 10,
-        width: width || 10,
-        height: height || 10,
+      const currentData = packageDoc.data();
+      updateFields.dimensions = {
+        length: length || currentData.dimensions?.length || 10,
+        width: width || currentData.dimensions?.width || 10,
+        height: height || currentData.dimensions?.height || 10,
         unit: "cm"
       };
     }
-    
-    if (weight) {
-      updateData.weight = {
+
+    if (weight !== undefined) {
+      updateFields.weight = {
         weight: weight,
         unit: "g"
       };
     }
-    
+
     if (items && Array.isArray(items) && items.length > 0) {
-      updateData.line_items = items.map(item => ({
-        line_item_id: item.lineItemId,
-        quantity: item.quantity
-      }));
+      updateFields.items = items;
     }
-    
-    // Update package in Zoho
-    const packageResponse = await axios.put(
-      `https://www.zohoapis.in/inventory/v1/packages/${id}`,
-      updateData,
-      {
-        headers: {
-          'Authorization': `Zoho-oauthtoken ${tokens.access_token}`,
-          'Content-Type': 'application/json',
-          'organization_id': process.env.ZOHO_ORGANIZATION_ID || '60038401466'
-        }
-      }
-    );
-    
-    // Update package in Firestore
-    if (packageResponse.data && packageResponse.data.package) {
-      const zohoPackage = packageResponse.data.package;
-      
-      // Find the package in Firestore
-      const packagesSnapshot = await db.collection('packages')
-        .where('zohoPackageId', '==', id)
-        .limit(1)
-        .get();
-      
-      if (!packagesSnapshot.empty) {
-        const packageDoc = packagesSnapshot.docs[0];
-        
-        const updateFields = {};
-        
-        if (packageName) updateFields.packageName = packageName;
-        
-        if (length || width || height) {
-          updateFields.dimensions = {
-            length: length || packageDoc.data().dimensions.length,
-            width: width || packageDoc.data().dimensions.width,
-            height: height || packageDoc.data().dimensions.height,
-            unit: "cm"
-          };
-        }
-        
-        if (weight) {
-          updateFields.weight = {
-            weight: weight,
-            unit: "g"
-          };
-        }
-        
-        if (items && Array.isArray(items) && items.length > 0) {
-          updateFields.items = items;
-        }
-        
-        updateFields.zohoData = zohoPackage;
-        updateFields.updatedAt = admin.firestore.FieldValue.serverTimestamp();
-        
-        await packageDoc.ref.update(updateFields);
-      }
+
+    if (status) {
+      updateFields.status = status;
     }
-    
+
+    updateFields.updatedAt = admin.firestore.FieldValue.serverTimestamp();
+
+    await packageRef.update(updateFields);
+
+    const updatedDoc = await packageRef.get();
+
     res.json({
       success: true,
       message: 'Package updated successfully',
-      package: packageResponse.data.package
+      package: {
+        id: updatedDoc.id,
+        ...updatedDoc.data()
+      }
     });
   } catch (error) {
     console.error('Error updating package:', error);
-    res.status(500).json({ 
-      error: 'Failed to update package', 
-      message: error.response?.data?.message || error.message 
+    res.status(500).json({
+      error: 'Failed to update package',
+      message: error.message
+    });
+  }
+});
+
+// Delete package
+router.delete('/:id', verifyFirebaseToken, verifyAdmin, async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const packageRef = db.collection('packages').doc(id);
+    const packageDoc = await packageRef.get();
+
+    if (!packageDoc.exists) {
+      return res.status(404).json({ error: 'Package not found' });
+    }
+
+    await packageRef.delete();
+
+    res.json({
+      success: true,
+      message: 'Package deleted successfully'
+    });
+  } catch (error) {
+    console.error('Error deleting package:', error);
+    res.status(500).json({
+      error: 'Failed to delete package',
+      message: error.message
     });
   }
 });

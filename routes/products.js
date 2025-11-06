@@ -1,7 +1,6 @@
 const express = require('express');
 const router = express.Router();
 const { db, admin } = require('../firebase');
-const axios = require('axios');
 
 // Firebase Auth verification middleware
 const verifyFirebaseToken = async (req, res, next) => {
@@ -30,6 +29,83 @@ const verifyFirebaseToken = async (req, res, next) => {
   }
 };
 
+// Get all products
+router.get('/products', verifyFirebaseToken, async (req, res) => {
+  try {
+    const { page = 1, limit = 25, category, search } = req.query;
+    const pageNum = parseInt(page);
+    const limitNum = parseInt(limit);
+    
+    let query = db.collection('products');
+    
+    if (category) {
+      query = query.where('category', '==', category);
+    }
+    
+    const snapshot = await query
+      .orderBy('createdAt', 'desc')
+      .limit(limitNum)
+      .offset((pageNum - 1) * limitNum)
+      .get();
+    
+    const products = [];
+    snapshot.forEach(doc => {
+      const data = doc.data();
+      products.push({
+        id: doc.id,
+        ...data,
+        createdAt: data.createdAt?.toDate?.() || null,
+        updatedAt: data.updatedAt?.toDate?.() || null
+      });
+    });
+    
+    // Filter by search term if provided
+    let filteredProducts = products;
+    if (search) {
+      const searchLower = search.toLowerCase();
+      filteredProducts = products.filter(p => 
+        p.name?.toLowerCase().includes(searchLower) ||
+        p.description?.toLowerCase().includes(searchLower) ||
+        p.sku?.toLowerCase().includes(searchLower)
+      );
+    }
+    
+    res.json({
+      products: filteredProducts,
+      page: pageNum,
+      limit: limitNum,
+      total: filteredProducts.length
+    });
+  } catch (error) {
+    console.error('Error fetching products:', error);
+    res.status(500).json({ error: 'Failed to fetch products' });
+  }
+});
+
+// Get product by ID
+router.get('/products/:id', verifyFirebaseToken, async (req, res) => {
+  try {
+    const { id } = req.params;
+    
+    const productDoc = await db.collection('products').doc(id).get();
+    
+    if (!productDoc.exists) {
+      return res.status(404).json({ error: 'Product not found' });
+    }
+    
+    const productData = productDoc.data();
+    res.json({
+      id: productDoc.id,
+      ...productData,
+      createdAt: productData.createdAt?.toDate?.() || null,
+      updatedAt: productData.updatedAt?.toDate?.() || null
+    });
+  } catch (error) {
+    console.error('Error fetching product:', error);
+    res.status(500).json({ error: 'Failed to fetch product' });
+  }
+});
+
 // Create a new product
 router.post('/products', verifyFirebaseToken, async (req, res) => {
   try {
@@ -50,93 +126,40 @@ router.post('/products', verifyFirebaseToken, async (req, res) => {
       productData.images = [];
     }
     
-    // Get Zoho tokens
-    const tokensRef = db.collection('system').doc('zoho_tokens');
-    const tokensDoc = await tokensRef.get();
+    // Create product in Firebase
+    const firebaseProductData = {
+      name: productData.name,
+      subtitle: productData.subtitle || '',
+      tagline: productData.tagline || '',
+      price: productData.price,
+      category: productData.category || '',
+      originalPrice: productData.originalPrice || productData.price,
+      discount: productData.discount || '',
+      rating: productData.rating || 0,
+      reviewCount: productData.reviewCount || 0,
+      stockStatus: productData.stockStatus || 'In Stock',
+      stockQuantity: productData.stockQuantity || 0,
+      description: productData.description || '',
+      longDescription: productData.longDescription || '',
+      features: productData.features || [],
+      howToUse: productData.howToUse || [],
+      ingredients: productData.ingredients || '',
+      images: productData.images,
+      sku: productData.sku,
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp()
+    };
     
-    if (!tokensDoc.exists) {
-      return res.status(500).json({ error: 'Zoho authentication not available' });
-    }
-    
-    const tokens = tokensDoc.data();
-    
-    // Start a Firestore transaction
-    const result = await db.runTransaction(async (transaction) => {
-      try {
-        // 1. Create item in Zoho Inventory
-        const zohoItemData = {
-          name: productData.name,
-          sku: productData.sku,
-          description: productData.description || '',
-          rate: productData.price,
-          purchase_rate: productData.originalPrice || productData.price,
-          item_type: "inventory",
-          product_type: "goods",
-          unit: "qty",
-        };
-        
-        const zohoResponse = await axios({
-          method: 'POST',
-          url: 'https://www.zohoapis.in/inventory/v1/items',
-          headers: {
-            'Authorization': `Zoho-oauthtoken ${tokens.access_token}`,
-            'Content-Type': 'application/json',
-            'organization_id': process.env.ZOHO_ORGANIZATION_ID || '60038401466'
-          },
-          data: zohoItemData
-        });
-        
-        if (zohoResponse.status !== 201 && zohoResponse.status !== 200) {
-          throw new Error(`Zoho API error: ${zohoResponse.statusText}`);
-        }
-        
-        const zohoItemId = zohoResponse.data.item.item_id;
-        
-        // 2. Create product in Firebase
-        const firebaseProductData = {
-          id: zohoItemId,
-          name: productData.name,
-          subtitle: productData.subtitle || '',
-          tagline: productData.tagline || '',
-          price: productData.price,
-          category : productData.category || '',
-          originalPrice: productData.originalPrice || productData.price,
-          discount: productData.discount || '',
-          rating: productData.rating || 0,
-          reviewCount: productData.reviewCount || 0,
-          stockStatus: productData.stockStatus || 'In Stock',
-          description: productData.description || '',
-          longDescription: productData.longDescription || '',
-          features: productData.features || [],
-          howToUse: productData.howToUse || [],
-          ingredients: productData.ingredients || '',
-          images: productData.images,
-          sku: productData.sku,
-          zohoItemId: zohoItemId,
-          createdAt: admin.firestore.FieldValue.serverTimestamp(),
-          updatedAt: admin.firestore.FieldValue.serverTimestamp()
-        };
-        
-        const productRef = db.collection('products').doc(firebaseProductData.id);
-        transaction.set(productRef, firebaseProductData);
-        
-        return {
-          success: true,
-          productId: productRef.id,
-          zohoItemId: zohoItemId,
-          product: firebaseProductData
-        };
-      } catch (error) {
-        console.error('Error in transaction:', error);
-        throw error; // This will cause the transaction to fail and roll back
-      }
-    });
+    const productRef = await db.collection('products').add(firebaseProductData);
     
     res.status(201).json({
       success: true,
-      message: 'Product created successfully in both Zoho and Firebase',
-      productId: result.productId,
-      zohoItemId: result.zohoItemId
+      message: 'Product created successfully',
+      productId: productRef.id,
+      product: {
+        id: productRef.id,
+        ...firebaseProductData
+      }
     });
   } catch (error) {
     console.error('Error creating product:', error);
@@ -144,6 +167,65 @@ router.post('/products', verifyFirebaseToken, async (req, res) => {
       error: 'Failed to create product', 
       message: error.message 
     });
+  }
+});
+
+// Update product
+router.put('/products/:id', verifyFirebaseToken, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const productData = req.body;
+    
+    const productRef = db.collection('products').doc(id);
+    const productDoc = await productRef.get();
+    
+    if (!productDoc.exists) {
+      return res.status(404).json({ error: 'Product not found' });
+    }
+    
+    const updateData = {
+      ...productData,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp()
+    };
+    
+    await productRef.update(updateData);
+    
+    const updatedDoc = await productRef.get();
+    res.json({
+      success: true,
+      message: 'Product updated successfully',
+      product: {
+        id: updatedDoc.id,
+        ...updatedDoc.data()
+      }
+    });
+  } catch (error) {
+    console.error('Error updating product:', error);
+    res.status(500).json({ error: 'Failed to update product' });
+  }
+});
+
+// Delete product
+router.delete('/products/:id', verifyFirebaseToken, async (req, res) => {
+  try {
+    const { id } = req.params;
+    
+    const productRef = db.collection('products').doc(id);
+    const productDoc = await productRef.get();
+    
+    if (!productDoc.exists) {
+      return res.status(404).json({ error: 'Product not found' });
+    }
+    
+    await productRef.delete();
+    
+    res.json({
+      success: true,
+      message: 'Product deleted successfully'
+    });
+  } catch (error) {
+    console.error('Error deleting product:', error);
+    res.status(500).json({ error: 'Failed to delete product' });
   }
 });
 
